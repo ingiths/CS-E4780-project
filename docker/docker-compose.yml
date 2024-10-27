@@ -1,0 +1,33 @@
+services:
+  nats:
+    image: nats:latest
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+      - "6222:6222"
+    command: 
+      - "--jetstream"
+      - "--http_port=8222"
+      - "--debug=true"
+      - "--trace=true"
+    volumes:
+      - nats-data:/data
+    environment:
+      - NATS_SERVER_NAME=nats-server
+      - NATS_CLUSTER_NAME=trading-cluster
+    networks:
+      - trading-network
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+volumes:
+  nats-data:
+    driver: local
+
+networks:
+  trading-network:
+    driver: bridge
