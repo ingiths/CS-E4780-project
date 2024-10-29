@@ -1,6 +1,7 @@
 import csv
 import datetime
 from enum import Enum
+from typing import Generator, Annotated
 
 import typer
 from pydantic import BaseModel, ConfigDict, field_validator, Field
@@ -137,14 +138,6 @@ class Event(BaseModel):
         return datetime.datetime.strptime(raw, "%d-%m-%Y").date()
 
     def __str__(self) -> str:
-        """
-        Returns a string representation of the event with key fields:
-        - ID
-        - Security Type
-        - Last Trade Price
-        - Trading Time
-        - Trading Date
-        """
 
         if all([self.last, self.trading_time, self.trading_date]):
             return (
@@ -167,56 +160,73 @@ class Event(BaseModel):
 app = typer.Typer()
 
 
-@app.command()
-def ingest(
-    files: list[str],
-):
-    print(f"Ingesting files {files}")
-
-
-@app.command()
-def explore(
-    file: str,
-    limit: int | None = None,
-    offset: int | None = None,
-    summarize: bool = True,
-    print_event: bool = False,
-):
-    with open(file) as f:
-        # Skip first 13 lines which explain the dataset and the header (columns) and
-        if offset:
-            skip = 13 + offset
-        else:
-            skip = 13
+def read_tick_data(
+    file: str, limit: int = -1, offset: int = 0
+) -> Generator[Event, None, None]:
+    event_count = 0
+    with open(file, "r") as f:
+        skip = 13 + offset
         for _ in range(skip):
             next(f)
         reader = csv.DictReader(
             f, delimiter=",", fieldnames=list(Event.model_fields.keys())
         )
-        count = 0
-        events = []
         for row in reader:
-            if limit and count == limit:
+            if event_count == limit:
                 break
-            count += 1
-            event = Event.model_validate(row)
-            events.append(event)
+            yield Event.model_validate(row)
+            event_count += 1
 
-            if print_event:
-                print(event)
 
-        if summarize:
-            if print_event:
-                print("===")
-            print(f"{BRIGHT_GREEN}Processed {len(events)} rows{RESET}")
-            unique_ids = set([e.id for e in events])
-            etr_exchange = set([e.id for e in events if e.id.split(".")[1] == "ETR"])
-            fr_exchange = set([e.id for e in events if e.id.split(".")[1] == "FR"])
-            nl_exchange = set([e.id for e in events if e.id.split(".")[1] == "NL"])
-            print(f"{BRIGHT_GREEN}Unique IDs{RESET} {len(unique_ids)}")
-            print(f"- {BRIGHT_GREEN}ETR{RESET} {len(etr_exchange)}")
-            print(f"- {BRIGHT_GREEN}FR{RESET} {len(fr_exchange)}")
-            print(f"- {BRIGHT_GREEN}NL{RESET} {len(nl_exchange)}")
+@app.command()
+def ingest(
+    files: list[str],
+    limit: Annotated[int, typer.Option("-l")] = -1,
+):
+    """
+    Simulates event creation
+
+    - How many events per second?
+    - How many producers?
+    
+    """
+    count = 0
+    for file in files:
+        event_stream = read_tick_data(file)
+        if count == limit:
+            break
+        for i in range(limit):
+            event = next(event_stream)
+            print(event)
+
+
+
+@app.command()
+def explore(
+    file: str,
+    limit: Annotated[int, typer.Option("-l")] = -1,
+    offset: Annotated[int, typer.Option("-o")] = 0,
+    summarize: bool = True,
+    print_event: bool = False,
+):
+    events = []
+    event_stream = read_tick_data(file, limit, offset)
+    for event in event_stream:
+        if print_event:
+            print(event)
+        events.append(event)
+    if summarize:
+        if print_event:
+            print("===")
+        print(f"{BRIGHT_GREEN}Processed {len(events)} rows{RESET}")
+        unique_ids = set([e.id for e in events])
+        etr_exchange = set([e.id for e in events if e.id.split(".")[1] == "ETR"])
+        fr_exchange = set([e.id for e in events if e.id.split(".")[1] == "FR"])
+        nl_exchange = set([e.id for e in events if e.id.split(".")[1] == "NL"])
+        print(f"{BRIGHT_GREEN}Unique IDs{RESET} {len(unique_ids)}")
+        print(f"- {BRIGHT_GREEN}ETR{RESET} {len(etr_exchange)}")
+        print(f"- {BRIGHT_GREEN}FR{RESET} {len(fr_exchange)}")
+        print(f"- {BRIGHT_GREEN}NL{RESET} {len(nl_exchange)}")
 
 
 if __name__ == "__main__":
