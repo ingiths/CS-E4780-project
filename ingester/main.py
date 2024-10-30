@@ -2,6 +2,11 @@ import csv
 import datetime
 from enum import Enum
 from typing import Generator, Annotated
+import asyncio
+import nats
+import struct
+import zoneinfo
+
 
 import typer
 from pydantic import BaseModel, ConfigDict, field_validator, Field
@@ -138,8 +143,7 @@ class Event(BaseModel):
         return datetime.datetime.strptime(raw, "%d-%m-%Y").date()
 
     def __str__(self) -> str:
-
-        if all([self.last, self.trading_time, self.trading_date]):
+        if None not in [self.last, self.trading_time, self.trading_date]:
             return (
                 f"{GREEN}Event(id={self.id}, "
                 f"security_type={self.security_type.value}, "
@@ -155,6 +159,36 @@ class Event(BaseModel):
                 f"trading_time={self.trading_time}, "
                 f"trading_date={self.trading_date}){RESET}"
             )
+
+    def as_nats_message(self) -> bytes:
+        last_float = struct.pack("f", self.last if self.last is not None else 0.0)
+
+        if self.trading_date and self.trading_time:
+            # All event notifications are time-stamped with a global CEST timestamp in the format HH:MM:ss.ssss
+            # https://en.wikipedia.org/wiki/Central_European_Summer_Time
+            datetime_combined = datetime.datetime.combine(self.trading_date, self.trading_time, tzinfo=zoneinfo.ZoneInfo("Europe/Paris"))
+            unix = int(datetime_combined.strftime("%s"))
+            # TODO: Finda  proper fix to CEST and UTC, not just adding 7200 seconds LOL
+            # Avoid padding with <
+            date_payload = struct.pack("<?I", True, unix + 2 * 3600)
+        else:
+            date_payload = struct.pack("?", False)
+
+        id_bytes = self.id.encode("utf-8")
+        sec_type_bytes = self.security_type.value.encode("utf-8")
+
+        str_data = (
+            struct.pack("I", len(id_bytes))
+            + struct.pack("I", 0)
+            + id_bytes
+            + struct.pack("I", len(sec_type_bytes))
+            + struct.pack("I", 0)
+            + sec_type_bytes
+        )
+
+        # Must be aware of Rust memory layout to properly do this
+        # https://doc.rust-lang.org/std/string/struct.String.html#representation
+        return last_float + date_payload + str_data
 
 
 app = typer.Typer()
@@ -188,17 +222,23 @@ def ingest(
 
     - How many events per second?
     - How many producers?
-    
     """
-    count = 0
-    for file in files:
-        event_stream = read_tick_data(file)
-        if count == limit:
-            break
-        for i in range(limit):
-            event = next(event_stream)
-            print(event)
 
+    async def async_ingest():
+        nc = await nats.connect("nats://localhost:4222")
+        js = nc.jetstream()
+
+        await js.add_stream(name="tick", subjects=["event"])
+
+        reader = read_tick_data(files[0])
+        for i in range(limit):
+            event = next(reader)
+            print(event)
+            await js.publish("event", event.as_nats_message())
+
+        await nc.close()
+
+    asyncio.run(async_ingest())
 
 
 @app.command()
