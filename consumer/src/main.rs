@@ -2,7 +2,6 @@ use std::fmt::{self};
 
 use bincode;
 use chrono::DateTime;
-use chrono_tz::Europe::Paris;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
