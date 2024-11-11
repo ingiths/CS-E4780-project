@@ -6,8 +6,13 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "alive-progress>=3.2.0",
+    "matplotlib>=3.9.2",
     "nats-py>=2.9.0",
+    "pandas>=2.2.3",
     "pydantic>=2.9.2",
+    "ruff>=0.7.1",
+    "seaborn>=0.13.2",
     "typer>=0.12.5",
 ]
 

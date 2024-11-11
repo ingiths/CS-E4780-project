@@ -6,10 +6,15 @@ import asyncio
 import nats
 import struct
 import zoneinfo
+import pathlib
 
 
+from alive_progress import alive_bar
 import typer
 from pydantic import BaseModel, ConfigDict, field_validator, Field
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 
 # https://sentry.io/answers/print-colored-text-to-terminal-with-python/
@@ -48,11 +53,9 @@ class Event(BaseModel):
     id: str = Field(description="Unique ID")
     # Star
     security_type: SecurityTypes = Field(description="Security Type (E)quity/(I)ndex")
-    # Star
     date: datetime.date | None = Field(
         default=None, description="System date for last received update"
     )
-    # Star
     time: datetime.time | None = Field(
         default=None, description="System time for last received update"
     )
@@ -104,7 +107,8 @@ class Event(BaseModel):
     auction_time: str = Field(description="Time when last auction price was made")
 
     model_config = ConfigDict(
-        frozen=True,
+        # TODO: Fix frozen after
+        # frozen=True,
     )
 
     @field_validator("date", mode="before")
@@ -166,7 +170,11 @@ class Event(BaseModel):
         if self.trading_date and self.trading_time:
             # All event notifications are time-stamped with a global CEST timestamp in the format HH:MM:ss.ssss
             # https://en.wikipedia.org/wiki/Central_European_Summer_Time
-            datetime_combined = datetime.datetime.combine(self.trading_date, self.trading_time, tzinfo=zoneinfo.ZoneInfo("Europe/Paris"))
+            datetime_combined = datetime.datetime.combine(
+                self.trading_date,
+                self.trading_time,
+                tzinfo=zoneinfo.ZoneInfo("Europe/Paris"),
+            )
             unix = int(datetime_combined.strftime("%s"))
             # TODO: Finda  proper fix to CEST and UTC, not just adding 7200 seconds LOL
             # Avoid padding with <
@@ -194,28 +202,43 @@ class Event(BaseModel):
 app = typer.Typer()
 
 
-def read_tick_data(
-    file: str, limit: int = -1, offset: int = 0
-) -> Generator[Event, None, None]:
-    event_count = 0
+def get_line_count(file: str) -> int:
+    f = open(file, "rb")
+    line_count = sum(1 for i in f)
+    f.close()
+    return line_count
+
+
+def read_tick_data(file: str, offset: int = 0) -> Generator[Event, None, None]:
+    file_trading_date = datetime.datetime.strptime(file[32:40], "%d-%m-%y").date()
+    current_offset = 0
     with open(file, "r") as f:
-        skip = 13 + offset
-        for _ in range(skip):
-            next(f)
+        # Skip comments and offset
+        for line in f:
+            if line.startswith("#"):
+                continue
+            if current_offset == offset:
+                _ = line
+                next(f)
+                break
+            current_offset += 1
+
         reader = csv.DictReader(
             f, delimiter=",", fieldnames=list(Event.model_fields.keys())
         )
+
         for row in reader:
-            if event_count == limit:
-                break
-            yield Event.model_validate(row)
-            event_count += 1
+            event = Event.model_validate(row)
+            event.trading_date = file_trading_date
+            yield event
 
 
 @app.command()
 def ingest(
     files: list[str],
     limit: Annotated[int, typer.Option("-l")] = -1,
+    entities: list[str] = [],
+    offset: int = 0,
 ):
     """
     Simulates event creation
@@ -226,15 +249,24 @@ def ingest(
 
     async def async_ingest():
         nc = await nats.connect("nats://localhost:4222")
-        js = nc.jetstream()
 
-        await js.add_stream(name="tick", subjects=["event"])
-
-        reader = read_tick_data(files[0])
-        for i in range(limit):
-            event = next(reader)
-            print(event)
-            await js.publish("event", event.as_nats_message())
+        reader = read_tick_data(files[0], offset)
+        if limit != -1:
+            with alive_bar(limit) as bar:
+                for _ in range(limit):
+                    event = next(reader)
+                    if len(entities) == 0 or event.id in entities:
+                        await nc.publish("event", event.as_nats_message())
+                        bar()
+        else:
+            for file in files:
+                print(f"Scanning line count in {file}")
+                line_count = get_line_count(file)
+                with alive_bar(line_count) as bar:
+                    for event in reader:
+                        if len(entities) == 0 or event.id in entities:
+                            await nc.publish("event", event.as_nats_message())
+                        bar()
 
         await nc.close()
 
@@ -250,8 +282,9 @@ def explore(
     print_event: bool = False,
 ):
     events = []
-    event_stream = read_tick_data(file, limit, offset)
-    for event in event_stream:
+    reader = read_tick_data(file, offset)
+    for _ in range(limit):
+        event = next(reader)
         if print_event:
             print(event)
         events.append(event)
@@ -267,6 +300,132 @@ def explore(
         print(f"- {BRIGHT_GREEN}ETR{RESET} {len(etr_exchange)}")
         print(f"- {BRIGHT_GREEN}FR{RESET} {len(fr_exchange)}")
         print(f"- {BRIGHT_GREEN}NL{RESET} {len(nl_exchange)}")
+
+
+def plot_single_ema(data: pd.DataFrame, id_value: str, output_dir: str) -> None:
+    plt.figure(figsize=(12, 6))
+
+    plt.plot(
+        data[data["Smoothing Factor"] == 38]["Window"],
+        data[data["Smoothing Factor"] == 38]["Calc"],
+        label="EMA-38",
+        color="blue",
+        marker="o",
+        markersize=4,
+    )
+
+    plt.plot(
+        data[data["Smoothing Factor"] == 100]["Window"],
+        data[data["Smoothing Factor"] == 100]["Calc"],
+        label="EMA-100",
+        color="red",
+        marker="o",
+        markersize=4,
+    )
+
+    plt.plot(
+        data[data["Smoothing Factor"] == 38]["Window"],
+        data[data["Smoothing Factor"] == 38]["Last"],
+        label="Price",
+        color="gray",
+        linestyle="--",
+        alpha=0.5,
+    )
+
+    plt.title(f"EMA Analysis for {id_value}")
+    plt.xlabel("Window")
+    plt.ylabel("Value")
+    plt.grid(True, linestyle="--", alpha=0.7)
+    plt.legend()
+
+    plt.xticks(data["Window"].unique())
+    plt.tight_layout()
+
+    output_file = f"{output_dir}/ema_analysis_{id_value}.png"
+    plt.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+@app.command()
+def plot(
+    data_file: str,
+    output_dir: str = "plots",
+    save_plots: bool = True,
+):
+    if save_plots and not pathlib.Path.exists(pathlib.Path(output_dir)):
+        pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    df = pd.read_csv(data_file, sep=";")
+
+    df["Timestamp"] = pd.to_datetime(df["Timestamp"], unit="s")
+
+    unique_ids = df["ID"].unique()
+    total_ids = len(unique_ids)
+
+    print(f"Processing {total_ids} unique IDs...")
+
+    for idx, id_value in enumerate(unique_ids, 1):
+        id_data = df[df["ID"] == id_value]
+
+        if save_plots:
+            plot_single_ema(id_data, id_value, output_dir)
+            print(f"Processed {idx}/{total_ids}: {id_value}")
+
+    print(f"\nPlots saved to {output_dir}/")
+
+
+@app.command()
+def plot_events(csv_file: str, id: str) -> None:
+    """
+    Plot 5 minute windows of last prices
+
+    Used for debugging and data exploration 
+    """
+    trading_date = str(datetime.datetime.strptime(csv_file[32:40], "%d-%m-%y").date())
+
+    df = pd.read_csv(
+        csv_file,
+        sep=",",
+        comment="#",
+        names=["ID", "SecType", "Last", "Trading time"],
+        header=0,
+        usecols=[0, 1, 21, 23],
+    )
+    df = df.dropna()
+    df["Last"] = pd.to_numeric(df["Last"], errors="coerce")
+
+    df["Trading time"] = pd.to_datetime(
+        trading_date + " " + df["Trading time"],
+        format="%Y-%m-%d %H:%M:%S.%f",
+        errors="coerce",
+    )
+
+    df_filtered = df[
+        df["Last"].notna()
+        & (df["Last"] != 0)
+        & (df["ID"] == id)
+        & (df["SecType"] == "I")
+    ]
+
+    if len(df_filtered) == 0:
+        print("No valid last price data found in the dataset")
+        return None
+
+    df_windowed = df_filtered.set_index("Trading time").resample("5T")["Last"].last()
+
+    plt.figure(figsize=(12, 6))
+    sns.set_style("whitegrid")
+
+    plt.plot(df_windowed.index, df_windowed.values, label=id, marker="o")
+
+    plt.title(f"Last Trading Prices (5-min windows) for {id} on {trading_date}")
+    plt.xlabel("Time")
+    plt.ylabel("Last Price")
+    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.show()
 
 
 if __name__ == "__main__":
