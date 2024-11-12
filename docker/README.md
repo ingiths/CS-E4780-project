@@ -1,1 +1,5 @@
-# Docker 
+# Docker
+
+```
+docker compose up -d
+```
