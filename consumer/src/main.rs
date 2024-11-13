@@ -130,7 +130,7 @@ async fn main() -> Result<()> {
 
         if !tick_event.is_valid() {
             invalid_events += 1;
-            if (valid_events + invalid_events) % 100 == 0 {
+            if (valid_events + invalid_events) % 10000 == 0 {
                 print!(
                     "Valid events: {}. Invalid events: {}. Written measurements: {} \r",
                     valid_events, invalid_events, written_measurements
@@ -140,7 +140,7 @@ async fn main() -> Result<()> {
             continue;
         } else {
             valid_events += 1;
-            if (valid_events + invalid_events) % 100 == 0 {
+            if (valid_events + invalid_events) % 10000 == 0 {
                 print!(
                     "Valid events: {}. Invalid events: {}. Written measurements: {} \r",
                     valid_events, invalid_events, written_measurements

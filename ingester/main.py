@@ -1,6 +1,5 @@
 import datetime
 from enum import Enum
-from typing import Annotated
 import asyncio
 import nats
 import struct
@@ -51,10 +50,16 @@ class Event(BaseModel):
     """
 
     id: str = Field(description="Unique ID", validation_alias="ID")
-    security_type: SecurityTypes = Field(description="Security Type (E)quity/(I)ndex", validation_alias="SecType")
-    last: float | None = Field(default=None, description="Last trade price", validation_alias="Last")
+    security_type: SecurityTypes = Field(
+        description="Security Type (E)quity/(I)ndex", validation_alias="SecType"
+    )
+    last: float | None = Field(
+        default=None, description="Last trade price", validation_alias="Last"
+    )
     trading_time: datetime.time | None = Field(
-        default=None, description="Time of last update (bid/ask/trade)", validation_alias="Trading time"
+        default=None,
+        description="Time of last update (bid/ask/trade)",
+        validation_alias="Trading time",
     )
     trading_date: datetime.date | None = Field(
         default=None, description="Date of last trade", validation_alias="Trading date"
@@ -115,10 +120,12 @@ class Event(BaseModel):
 
 app = typer.Typer()
 
+
 @app.command()
 def ingest(
     files: list[str],
     entity: str | None = None,
+    flush_interval: int | None = None
 ):
     """
     Simulates event creation
@@ -130,7 +137,9 @@ def ingest(
     async def async_ingest():
         nc = await nats.connect("nats://localhost:4222")
         for file in files:
-            file_trading_date = datetime.datetime.strptime(file[32:40], "%d-%m-%y").date()
+            file_trading_date = datetime.datetime.strptime(
+                file[32:40], "%d-%m-%y"
+            ).date()
             print(f"Reading file {file}")
 
             start = time.time()
@@ -141,19 +150,21 @@ def ingest(
                 q = q.filter(pl.col("ID") == entity)
 
             df = q.collect()
-            df = df.with_columns(
-                pl.lit(file_trading_date).alias("Trading date")
-            )
+            df = df.with_columns(pl.lit(file_trading_date).alias("Trading date"))
             end = time.time()
             print(f"Read {file} in {round(end - start, 2)} seconds, shape: {df.shape}.")
 
             print("Starting ingestion into NATS server")
             with alive_bar(df.shape[0]) as bar:
-                for i in df.iter_rows(named=True):
-                    event = Event.model_validate(i)
+                for (i, row) in enumerate(df.iter_rows(named=True)):
+                    event = Event.model_validate(row)
                     await nc.publish("event", event.as_nats_message())
+
+                    if flush_interval and i % flush_interval == 0:
+                        await nc.flush()
                     bar()
 
+        await nc.flush()
         await nc.close()
 
     asyncio.run(async_ingest())
@@ -175,9 +186,7 @@ def explore(
         q = q.filter(pl.col("ID") == entity)
 
     df = q.collect()
-    df = df.with_columns(
-        pl.lit(file_trading_date).alias("Trading date")
-    )
+    df = df.with_columns(pl.lit(file_trading_date).alias("Trading date"))
     end = time.time()
     print(f"Read {file} in {round(end - start, 2)} seconds, shape: {df.shape}.")
 
