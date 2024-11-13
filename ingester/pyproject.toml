@@ -10,6 +10,7 @@ dependencies = [
     "matplotlib>=3.9.2",
     "nats-py>=2.9.0",
     "pandas>=2.2.3",
+    "polars>=1.13.0",
     "pydantic>=2.9.2",
     "ruff>=0.7.1",
     "seaborn>=0.13.2",

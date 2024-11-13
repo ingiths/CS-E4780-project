@@ -2,12 +2,15 @@ use std::collections::HashMap;
 use std::fmt::{self};
 use std::io::Write;
 
+
 use anyhow::{anyhow, Result};
 use bincode;
+use chrono::{DateTime, TimeZone, Utc};
 use futures::StreamExt;
+use influxdb::{Client, InfluxDbWriteable, };
 use serde::{Deserialize, Serialize};
 use tokio::fs::File;
-use tokio::io::AsyncWriteExt; // for write_all()
+use tokio::io::AsyncWriteExt;
 
 #[derive(Serialize, Deserialize)]
 struct TickEvent {
@@ -49,6 +52,16 @@ struct EMACalculator {
     prev: f32,
 }
 
+#[derive(InfluxDbWriteable)]
+struct EmaResult {
+    time: DateTime<Utc>,
+    smoothing_factor: u8,
+    calc_38: f32,
+    calc_100: f32,
+    #[influxdb(tag)]
+    id: String,
+}
+
 impl EMACalculator {
     fn new(window_duration: u32, smoothing_factor: f32) -> EMACalculator {
         EMACalculator {
@@ -74,7 +87,6 @@ impl EMACalculator {
 
         // Check if window duration has exceeded, if so, calculate
         if self.start + self.window_duration < trading_timestamp {
-            // New window starts here
             self.start = trading_timestamp;
             let calc = event.last * (2.0 / (1.0 + self.smoothing_factor))
                 + self.prev * (1.0 - 2.0 / (1.0 + self.smoothing_factor));
@@ -108,6 +120,11 @@ async fn main() -> Result<()> {
 
     let mut valid_events = 0;
     let mut invalid_events = 0;
+    let mut written_measurements = 0;
+
+    let client = Client::new("http://localhost:8086", "trading_bucket").with_token("token");
+    println!("Connected to InfluxDB server: name={} url={}", client.database_name(), client.database_url());
+
     while let Some(message) = subscriber.next().await {
         let tick_event = bincode::deserialize::<TickEvent>(&message.payload)?;
 
@@ -115,8 +132,8 @@ async fn main() -> Result<()> {
             invalid_events += 1;
             if (valid_events + invalid_events) % 100 == 0 {
                 print!(
-                    "Valid events: {}. Invalid events: {} \r",
-                    valid_events, invalid_events
+                    "Valid events: {}. Invalid events: {}. Written measurements: {} \r",
+                    valid_events, invalid_events, written_measurements
                 );
                 std::io::stdout().flush().unwrap();
             }
@@ -125,8 +142,8 @@ async fn main() -> Result<()> {
             valid_events += 1;
             if (valid_events + invalid_events) % 100 == 0 {
                 print!(
-                    "Valid events: {}. Invalid events: {} \r",
-                    valid_events, invalid_events
+                    "Valid events: {}. Invalid events: {}. Written measurements: {} \r",
+                    valid_events, invalid_events, written_measurements
                 );
                 std::io::stdout().flush().unwrap();
             }
@@ -142,35 +159,17 @@ async fn main() -> Result<()> {
         let ema_100_updated = emas.1.update(&tick_event);
 
         if ema_38_updated && ema_100_updated {
-            csv_file
-                .write_all(
-                    format!(
-                        "{};{};{};{};{};{}\n",
-                        tick_event.id,
-                        emas.2,
-                        tick_event.last,
-                        tick_event.trading_timestamp.unwrap(),
-                        38,
-                        emas.0.prev
-                    )
-                    .as_bytes(),
-                )
-                .await?;
-            csv_file
-                .write_all(
-                    format!(
-                        "{};{};{};{};{};{}\n",
-                        tick_event.id,
-                        emas.2,
-                        tick_event.last,
-                        tick_event.trading_timestamp.unwrap(),
-                        100,
-                        emas.1.prev
-                    )
-                    .as_bytes(),
-                )
-                .await?;
+            let write_query = EmaResult {
+                id: tick_event.id,
+                calc_38: emas.0.prev,
+                calc_100: emas.1.prev,
+                time: Utc.timestamp_opt(tick_event.trading_timestamp.unwrap() as i64, 0).unwrap(),
+                smoothing_factor: emas.0.smoothing_factor as u8
+            }.into_query("trading_bucket");
             emas.2 += 1;
+            client.query(write_query).await?;
+
+            written_measurements += 1;
         }
     }
 
