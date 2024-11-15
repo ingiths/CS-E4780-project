@@ -15,54 +15,54 @@ services:
     depends_on:
       - influxdb
 
-  prometheus-nats-exporter:
-    image: natsio/prometheus-nats-exporter:latest
-    networks:
-      - trading-network
-    ports:
-      - "127.0.0.1:7777:7777"
-    command:
-      - -varz
-      - -channelz
-      - -serverz
-      - "http://nats:8222"
-    depends_on:
-      - nats
-      - influxdb
+  # prometheus-nats-exporter:
+  #   image: natsio/prometheus-nats-exporter:latest
+  #   networks:
+  #     - trading-network
+  #   ports:
+  #     - "127.0.0.1:7777:7777"
+  #   command:
+  #     - -varz
+  #     - -channelz
+  #     - -serverz
+  #     - "http://nats:8222"
+  #   depends_on:
+  #     - nats
+  #     - influxdb
   
-  prometheus:
-    image: prom/prometheus:latest
-    ports:
-      - "127.0.0.1:9090:9090"
-    build:
-      context: .
-      dockerfile: Dockerfile.prometheus
-    command:
-      - --web.listen-address=0.0.0.0:9090
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --web.console.libraries=/usr/share/prometheus/console_libraries
-      - --web.console.templates=/usr/share/prometheus/consoles
-    networks:
-      - trading-network
-    depends_on:
-      - prometheus-nats-exporter
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   ports:
+  #     - "127.0.0.1:9090:9090"
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.prometheus
+  #   command:
+  #     - --web.listen-address=0.0.0.0:9090
+  #     - --config.file=/etc/prometheus/prometheus.yml
+  #     - --storage.tsdb.path=/prometheus
+  #     - --web.console.libraries=/usr/share/prometheus/console_libraries
+  #     - --web.console.templates=/usr/share/prometheus/consoles
+  #   networks:
+  #     - trading-network
+  #   depends_on:
+  #     - prometheus-nats-exporter
   
   
-  grafana:
-    build:
-      context: .
-      dockerfile: Dockerfile.grafana
-    ports:
-      - 127.0.0.1:3000:3000
-    networks:
-      - trading-network
-    # volumes:
-    #   - ./provisioning:/etc/grafana/provisioning
-    depends_on:
-      - influxdb
-      - nats
-      - prometheus-nats-exporter
+  # grafana:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.grafana
+  #   ports:
+  #     - 127.0.0.1:3000:3000
+  #   networks:
+  #     - trading-network
+  #   # volumes:
+  #   #   - ./provisioning:/etc/grafana/provisioning
+  #   depends_on:
+  #     - influxdb
+  #     - nats
+  #     - prometheus-nats-exporter
 
 
   influxdb:
