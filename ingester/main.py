@@ -142,7 +142,7 @@ def ingest(
                 for i, row in enumerate(df.iter_rows(named=True)):
                     event = Event.model_validate(row)
                     exchange = event.id.split(".")[1]
-                    await nc.publish(f"exhcange.{exchange}", event.as_nats_message())
+                    await nc.publish(f"exchange.{exchange}", event.as_nats_message())
 
                     if flush_interval and i % flush_interval == 0:
                         await nc.flush()

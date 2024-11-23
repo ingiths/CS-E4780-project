@@ -47,6 +47,10 @@ struct EmaResult {
     time: DateTime<Utc>,
     calc_38: f32,
     calc_100: f32,
+    first: f32, // Price of window opening
+    last: f32, // Price of window closing
+    max: f32, // Max value of window
+    min: f32, // Min value of window
     #[influxdb(tag)]
     id: String,
     #[influxdb(tag)]
@@ -113,10 +117,15 @@ struct Window {
     previous: (f32, f32), // (ema_38, ema_100)
     start_time: u32,
     end_time: u32,
+    // Information about prices
+    first: f32, // Price of window opening
+    last: f32, // Price of window closing
+    max: f32, // Max value of window
+    min: f32, // Min value of window
 }
 
 impl Window {
-    fn new(start_time: u32) -> Window {
+    fn new(start_time: u32, price: f32) -> Window {
         Window {
             ema: EMA::new(),
             sequence_number: 0,
@@ -124,6 +133,10 @@ impl Window {
             previous: (0.0, 0.0),
             start_time,
             end_time: start_time + 300,
+            first: price, 
+            last: 0.0,
+            max: price,
+            min: price,
         }
     }
 
@@ -132,6 +145,12 @@ impl Window {
         self.start_time = new_start_time;
         self.end_time = self.start_time + 300;
         self.sequence_number += 1;
+
+        // Update values for candlestick chart
+        self.first = last_price;
+        self.last = 0.0; 
+        self.max = last_price;
+        self.min = last_price;
 
         let result = if current.0 < current.1 && self.previous.0 > self.previous.1 {
             Some(BreakoutType::Bearish)
@@ -178,12 +197,28 @@ async fn consumer<T: AsRef<str>>(exchange: T) -> Result<()> {
         let trading_timestamp = tick_event
             .trading_timestamp
             .expect("Got invalid tick event");
+        let last = tick_event.last.unwrap();
 
         let window = windows
             .entry(tick_event.id.clone())
-            .or_insert_with(|| Window::new(trading_timestamp));
+            .or_insert_with(|| Window::new(trading_timestamp, last));
+
+        if window.max < last {
+            window.max = last;
+        }
+
+        if last < window.min {
+            window.min = last;
+        }
 
         if window.end_time < trading_timestamp {
+            window.last = last;
+
+            let window_first = window.first;
+            let window_last = window.last;
+            let window_max = window.max;
+            let window_min = window.min;
+
             let breakout = window.tumble(trading_timestamp, tick_event.last.unwrap());
             let write_query = EmaResult {
                 // Slow clone!?
@@ -194,6 +229,10 @@ async fn consumer<T: AsRef<str>>(exchange: T) -> Result<()> {
                     .timestamp_opt(tick_event.trading_timestamp.unwrap() as i64, 0)
                     .unwrap(),
                 equity_type: tick_event.equity_type,
+                first: window_first,
+                last: window_last,
+                max: window_max,
+                min: window_min
             }
             .into_query("trading_bucket");
             client.query(write_query).await?;
@@ -206,6 +245,7 @@ async fn consumer<T: AsRef<str>>(exchange: T) -> Result<()> {
                 None => {}
             }
         }
+
     }
     Ok(())
 }
