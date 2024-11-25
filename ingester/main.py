@@ -219,7 +219,7 @@ def plot_events(csv_file: str, id: str) -> None:
     plt.figure(figsize=(12, 6))
     sns.set_style("whitegrid")
 
-    plt.plot(df_windowed.index, df_windowed.values, label=id, marker="o") #type: ignore
+    plt.plot(df_windowed.index, df_windowed.values, label=id, marker="o")  # type: ignore
 
     plt.title(f"Last Trading Prices (5-min windows) for {id} on {trading_date}")
     plt.xlabel("Time")

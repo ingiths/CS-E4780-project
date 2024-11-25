@@ -32,6 +32,21 @@ services:
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=token
     # volumes:
     #   - influxdb-data:/var/lib/influxdb2
+
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+     - '3000:3000'
+    volumes:
+      - ../visualization/provisioning:/etc/grafana/provisioning
+      - ../visualization/dashboard.json:/etc/grafana/provisioning/dashboards/dashboard.json
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    networks:
+      - trading-network
   
 
 # volumes:
