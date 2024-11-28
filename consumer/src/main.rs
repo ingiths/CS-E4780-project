@@ -77,10 +77,13 @@ struct EmaResult {
 
 #[derive(InfluxDbWriteable, Debug)]
 struct Breakout {
-    time: DateTime<Utc>,
-    btype: bool, // 0 for bull-ish, 1 for bear-ish
     #[influxdb(tag)]
     id: String,
+    #[influxdb(tag)]
+    tags: String,
+    time: DateTime<Utc>,
+    title: String,
+    text: String,
 }
 
 impl Breakout {
@@ -88,14 +91,18 @@ impl Breakout {
         let time = Utc.timestamp_opt(time, 0).unwrap();
         let breakout = match btype {
             BreakoutType::Bullish => Breakout {
-                id,
+                id: id.clone(),
+                text: format!("Bullish event for {}", id),
                 time,
-                btype: false,
+                title: "Bullish breakout event".to_string(),
+                tags: "bullish".to_string()
             },
             BreakoutType::Bearish => Breakout {
-                id,
+                id: id.clone(),
+                text: format!("Bearish event for {}", id),
                 time,
-                btype: true,
+                title: "Bearish breakout event".to_string(),
+                tags: "bearish".to_string()
             },
         };
         breakout
@@ -280,7 +287,7 @@ impl TickEventManager {
 
             match breakout {
                 Some(b) => {
-                    let breakout = Breakout::new(tick_event.id, trading_timestamp as i64, b);
+                    let breakout = Breakout::new(tick_event.id, round_up(tick_event.trading_timestamp.unwrap() as i64, 300) - 300, b);
                     self.influx_client
                         .query(breakout.into_query("breakout"))
                         .await
