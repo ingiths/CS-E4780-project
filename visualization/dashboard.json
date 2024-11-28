@@ -20,8 +20,12 @@
         },
         "enable": true,
         "hide": false,
-        "iconColor": "red",
+        "iconColor": "green",
         "mappings": {
+          "tags": {
+            "source": "field",
+            "value": "Buy"
+          },
           "time": {
             "source": "field",
             "value": "Time"
@@ -31,9 +35,33 @@
             "value": "Value"
           }
         },
-        "name": "Breakout",
+        "name": "Bullish",
         "target": {
           "query": "from(bucket: \"trading_bucket\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"breakout\")\n  |> filter(fn: (r) => r.tags == \"bullish\")\n  |> filter(fn: (r) => r._field == \"title\")\n  |> filter(fn: (r) => r.id == \"${id}\")",
+          "refId": "Anno"
+        }
+      },
+      {
+        "datasource": {
+          "type": "influxdb",
+          "uid": "P613A276C633CD688"
+        },
+        "enable": true,
+        "hide": false,
+        "iconColor": "red",
+        "mappings": {
+          "tags": {
+            "source": "field",
+            "value": "Sell"
+          },
+          "time": {
+            "source": "field",
+            "value": "Time"
+          }
+        },
+        "name": "Bearish",
+        "target": {
+          "query": "from(bucket: \"trading_bucket\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"breakout\")\n  |> filter(fn: (r) => r.tags == \"bearish\")\n  |> filter(fn: (r) => r._field == \"title\")\n  |> filter(fn: (r) => r.id == \"${id}\")",
           "refId": "Anno"
         }
       }
@@ -42,7 +70,7 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 2,
+  "id": 1,
   "links": [],
   "panels": [
     {
@@ -87,7 +115,7 @@
             },
             "insertNulls": false,
             "lineInterpolation": "linear",
-            "lineWidth": 1,
+            "lineWidth": 2,
             "pointSize": 5,
             "scaleDistribution": {
               "type": "linear"
@@ -117,7 +145,54 @@
             ]
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "calc_100"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "purple",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "displayName",
+                "value": "EMA 100"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "calc_38"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "blue",
+                  "mode": "fixed"
+                }
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "displayName",
+                "value": "EMA 38"
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
@@ -155,8 +230,17 @@
       "pluginVersion": "11.3.1",
       "targets": [
         {
-          "query": "from(bucket: \"trading_bucket\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"trading_bucket\" or r[\"_measurement\"] == \"breakout\")\n  |> filter(fn: (r) => r[\"_field\"] == \"first\" or r[\"_field\"] == \"last\" or r[\"_field\"] == \"max\" or r[\"_field\"] == \"min\" or r[\"_field\"] == \"btype\" or r[\"_field\"] == \"calc_100\" or r[\"_field\"] == \"calc_38\")\n  |> filter(fn: (r) => r[\"equity_type\"] == \"E\" or r[\"equity_type\"] == \"I\")\n  |> filter(fn: (r) => r[\"id\"] == \"${id}\")",
+          "query": "from(bucket: \"trading_bucket\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"trading_bucket\")\n  |> filter(fn: (r) => r[\"_field\"] == \"first\" or r[\"_field\"] == \"last\" or r[\"_field\"] == \"max\" or r[\"_field\"] == \"min\")\n  |> filter(fn: (r) => r[\"id\"] == \"${id}\")",
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "P613A276C633CD688"
+          },
+          "hide": false,
+          "query": "from(bucket: \"trading_bucket\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"trading_bucket\")\n  |> filter(fn: (r) => r[\"_field\"] == \"calc_100\" or r[\"_field\"] == \"calc_38\")\n  |> filter(fn: (r) => r[\"id\"] == \"${id}\")",
+          "refId": "B"
         }
       ],
       "title": "ID: ${id}",
@@ -255,8 +339,8 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "candle",
+  "title": "Trading",
   "uid": "fe4t4qfwmesxsf",
-  "version": 7,
+  "version": 8,
   "weekStart": ""
 }
