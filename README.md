@@ -9,6 +9,12 @@ Scalable Systems and Data Management Course Project Detecting Trading Trends in 
 
 # How to run
 
+### Containers
+
+```
+docker compose  -f docker/docker-compose.yml -f docker/compose.jetstream.yml up
+```
+
 ### Ingester
 
 - Install dependencies
