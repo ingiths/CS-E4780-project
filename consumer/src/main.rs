@@ -1,14 +1,16 @@
 mod cli;
 
 use std::collections::HashMap;
+use std::io::prelude::*;
 
 use anyhow::{anyhow, Result};
 use bincode;
-use chrono::{round, DateTime, TimeZone, Timelike, Utc};
+use chrono::{DateTime, TimeZone, Timelike, Utc};
 use clap::Parser;
 use futures::StreamExt;
-use influxdb::{Client, InfluxDbWriteable};
+use influxdb::{Client, InfluxDbWriteable, WriteQuery};
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 use cli::{Cli, NatsMode, Partition};
 
@@ -80,7 +82,13 @@ struct Breakout {
 }
 
 impl Breakout {
-    fn new(id: String, time: i64, btype: BreakoutType, previous: (f32, f32), current: (f32, f32)) -> Breakout {
+    fn new(
+        id: String,
+        time: i64,
+        btype: BreakoutType,
+        previous: (f32, f32),
+        current: (f32, f32),
+    ) -> Breakout {
         let time = Utc.timestamp_opt(time, 0).unwrap();
         let breakout = match btype {
             BreakoutType::Bullish => Breakout {
@@ -156,7 +164,11 @@ impl Window {
         }
     }
 
-    fn tumble(&mut self, new_start_time: i64, last_price: f32) -> Option<(BreakoutType, (f32, f32))> {
+    fn tumble(
+        &mut self,
+        new_start_time: i64,
+        last_price: f32,
+    ) -> Option<(BreakoutType, (f32, f32))> {
         // (ema_38, ema_100)
         let (current_ema_38, current_ema_100) = self.ema.calc(last_price, self.previous);
         let (previous_ema_38, previous_ema_100) = self.previous;
@@ -189,25 +201,16 @@ impl Window {
 
 struct TickEventManager {
     windows: HashMap<String, Window>,
-    influx_client: influxdb::Client,
 }
 
 impl TickEventManager {
-    fn new<T: AsRef<str>>(influx_url: T, influx_bucket: T) -> TickEventManager {
-        let influx_client =
-            Client::new(influx_url.as_ref(), influx_bucket.as_ref()).with_token("token");
-        println!(
-            "Connected to InfluxDB server: name={} url={}",
-            influx_client.database_name(),
-            influx_client.database_url()
-        );
+    fn new() -> TickEventManager {
         TickEventManager {
             windows: HashMap::new(),
-            influx_client,
         }
     }
 
-    async fn update(&mut self, tick_event: TickEvent) {
+    async fn update(&mut self, tick_event: TickEvent) -> Option<(EmaResult, Option<Breakout>)> {
         let trading_timestamp = tick_event
             .trading_timestamp
             .expect("Got invalid tick event") as i64;
@@ -227,79 +230,74 @@ impl TickEventManager {
             window.min = last;
         }
 
-        if window.end_time < trading_timestamp {
-            // Write previous windows if the gap is jlarge
-            let empty_windows = round_up(trading_timestamp - window.end_time, 300) / 300 - 1;
+        if window.end_time >= trading_timestamp {
+            return None;
+        }
 
-            // Skip the last window (since it contains new values)
-            for i in 0..empty_windows {
-                let write_query = EmaResult {
-                    // Slow clone!?
-                    id: tick_event.id.clone(),
-                    calc_38: window.previous.0,
-                    calc_100: window.previous.1,
-                    time: Utc
-                        .timestamp_opt(
-                            round_up(tick_event.trading_timestamp.unwrap() as i64, 300) - 300 * i,
-                            0,
-                        )
-                        .unwrap(),
-                    equity_type: tick_event.equity_type.clone(),
-                    first: window.last,
-                    last: window.last,
-                    max: window.last,
-                    min: window.last,
-                }
-                .into_query("trading_bucket");
-                self.influx_client
-                    .query(write_query)
-                    .await
-                    .expect("Unable to write empty window");
-            }
+        // Write previous windows if the gap is jlarge
+        // let empty_windows = round_up(trading_timestamp - window.end_time, 300) / 300 - 1;
 
-            window.last = last;
-            let window_first = window.first;
-            let window_last = window.last;
-            let window_max = window.max;
-            let window_min = window.min;
+        // Skip the last window (since it contains new values)
+        // for i in 0..empty_windows {
+        //     let write_query = EmaResult {
+        //         // Slow clone!?
+        //         id: tick_event.id.clone(),
+        //         calc_38: window.previous.0,
+        //         calc_100: window.previous.1,
+        //         time: Utc
+        //             .timestamp_opt(
+        //                 round_up(tick_event.trading_timestamp.unwrap() as i64, 300) - 300 * i,
+        //                 0,
+        //             )
+        //             .unwrap(),
+        //         equity_type: tick_event.equity_type.clone(),
+        //         first: window.last,
+        //         last: window.last,
+        //         max: window.last,
+        //         min: window.last,
+        //     }
+        //     .into_query("trading_bucket");
+        //     self.influx_client
+        //         .query(write_query)
+        //         .await
+        //         .expect("Unable to write empty window");
+        // }
 
-            let breakout = window.tumble(trading_timestamp, tick_event.last.unwrap());
-            let write_query = EmaResult {
-                // Slow clone!?
-                id: tick_event.id.clone(),
-                calc_38: window.previous.0,
-                calc_100: window.previous.1,
-                time: Utc
-                    .timestamp_opt(
-                        round_up(tick_event.trading_timestamp.unwrap() as i64, 300) - 300,
-                        0,
-                    )
-                    .unwrap(),
-                equity_type: tick_event.equity_type,
-                first: window_first,
-                last: window_last,
-                max: window_max,
-                min: window_min,
-            }
-            .into_query("trading_bucket");
-            self.influx_client
-                .query(write_query)
-                .await
-                .expect("Unable to write window");
+        window.last = last;
+        let window_first = window.first;
+        let window_last = window.last;
+        let window_max = window.max;
+        let window_min = window.min;
 
-            if let Some(b) = breakout {
-                let breakout = Breakout::new(
-                    tick_event.id,
+        let breakout = window.tumble(trading_timestamp, tick_event.last.unwrap());
+        let ema_result = EmaResult {
+            // Slow clone!?
+            id: tick_event.id.clone(),
+            calc_38: window.previous.0,
+            calc_100: window.previous.1,
+            time: Utc
+                .timestamp_opt(
                     round_up(tick_event.trading_timestamp.unwrap() as i64, 300) - 300,
-                    b.0,
-                    b.1,
-                    window.previous
-                );
-                self.influx_client
-                    .query(breakout.into_query("breakout"))
-                    .await
-                    .expect("Unable to write breakout event");
-            }
+                    0,
+                )
+                .unwrap(),
+            equity_type: tick_event.equity_type,
+            first: window_first,
+            last: window_last,
+            max: window_max,
+            min: window_min,
+        };
+        if let Some(b) = breakout {
+            let breakout = Breakout::new(
+                tick_event.id,
+                round_up(tick_event.trading_timestamp.unwrap() as i64, 300) - 300,
+                b.0,
+                b.1,
+                window.previous,
+            );
+            Some((ema_result, Some(breakout)))
+        } else {
+            Some((ema_result, None))
         }
     }
 }
@@ -308,21 +306,55 @@ async fn start_core_nats_loop<T: AsRef<str>>(
     exchange: T,
     nats_client: async_nats::Client,
 ) -> Result<()> {
+    let (tx, mut rx) = mpsc::channel::<(EmaResult, Option<Breakout>)>(1000);
+
+    let influx_client =
+        Client::new("http://localhost:8086", "trading_bucket").with_token("token");
+    println!(
+        "Connected to InfluxDB server: name={} url={}",
+        influx_client.database_name(),
+        influx_client.database_url()
+    );
+
+    tokio::spawn(async move {
+        let mut buffer = Vec::with_capacity(500);
+        while let Some(i) = rx.recv().await {
+            buffer.push(i);
+            if buffer.len() == 500 {
+                let windows = buffer.drain(..);
+                let (windows, breakouts): (Vec<EmaResult>, Vec<Option<Breakout>>) = windows.into_iter().unzip();
+                let windows = windows.into_iter().map(|w| w.into_query("trading_bucket")).collect::<Vec<WriteQuery>>();
+                let breakouts = breakouts.into_iter().filter(|b| b.is_some()).map(|b| b.unwrap()).map(|b| b.into_query("breakout")).collect::<Vec<WriteQuery>>();
+                influx_client.query(windows).await.unwrap();
+                influx_client.query(breakouts).await.unwrap();
+            }
+        }
+    });
+
     let mut subscriber = nats_client
         .subscribe(exchange.as_ref().to_string())
         .await
         .map_err(|_| anyhow!("Could not subscribe to 'event"))?;
     println!("Subscribed to {}", exchange.as_ref());
 
-    let mut manager = TickEventManager::new("http://localhost:8086", "trading_bucket");
+
+    let mut manager = TickEventManager::new();
+
+    let mut counter = 0;
 
     while let Some(message) = subscriber.next().await {
         let tick_event = bincode::deserialize::<TickEvent>(&message.payload)?;
+        counter += 1;
+        if counter % 10000 == 0 {
+            print!("Counter: {}\r", counter);
+            std::io::stdout().flush().unwrap();
+        }
         if !tick_event.is_valid() {
-            // TODO: Log to error reporting service;
             continue;
         }
-        manager.update(tick_event).await;
+        if let Some(window) = manager.update(tick_event).await {
+            tx.send(window).await.unwrap();
+        }
     }
 
     Ok(())
@@ -358,7 +390,7 @@ async fn start_jestream_loop<T: AsRef<str>>(
 
     let mut messages = consumer.messages().await?;
 
-    let mut manager = TickEventManager::new("http://localhost:8086", "trading_bucket");
+    let mut manager = TickEventManager::new();
 
     while let Some(message) = messages.next().await {
         match message {
