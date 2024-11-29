@@ -16,6 +16,7 @@ use cli::{Cli, NatsMode, Partition};
 
 use async_nats::jetstream;
 use async_nats::jetstream::consumer::PullConsumer;
+use tokio::time::timeout;
 
 const EMA_38: f32 = 38.0;
 const EMA_100: f32 = 100.0;
@@ -100,7 +101,7 @@ impl Breakout {
             BreakoutType::Bearish => Breakout {
                 id: id.clone(),
                 time,
-                title: format!("Bearish event for {} due to WindowCurrent({} < {}) AND WindowPrevious({} >= {})", id, current.0, current.1, previous.0, previous.1),
+                title: format!("Bearish event (SELL SELL SELL!) for {} due to WindowCurrent({} < {}) AND WindowPrevious({} >= {})", id, current.0, current.1, previous.0, previous.1),
                 tags: "bearish".to_string(),
             },
         };
@@ -138,7 +139,7 @@ enum BreakoutType {
 struct Window {
     ema: EMA,
     sequence_number: u32,
-    previous: (f32, f32), // (ema_38, ema_100)
+    current_emas: (f32, f32), // (ema_38, ema_100)
     start_time: i64,
     end_time: i64,
     // Information about prices
@@ -154,7 +155,7 @@ impl Window {
             ema: EMA::new(),
             sequence_number: 0,
             // (ema_38, ema_100)
-            previous: (0.0, 0.0),
+            current_emas: (0.0, 0.0),
             start_time,
             end_time: round_up(start_time, 300) - 300,
             first: price,
@@ -170,11 +171,10 @@ impl Window {
         last_price: f32,
     ) -> Option<(BreakoutType, (f32, f32))> {
         // (ema_38, ema_100)
-        let (current_ema_38, current_ema_100) = self.ema.calc(last_price, self.previous);
-        let (previous_ema_38, previous_ema_100) = self.previous;
+        let (new_ema_38, new_ema_100) = self.ema.calc(last_price, self.current_emas);
+        let (current_ema_38, current_ema_100) = self.current_emas;
         self.start_time = new_start_time;
-        self.end_time = round_up(self.start_time, 300) - 300;
-        self.sequence_number += 1;
+        self.end_time = self.start_time + 300;
 
         // Update values for candlestick chart
         self.first = last_price;
@@ -185,17 +185,27 @@ impl Window {
         // A bearish breakout event occurs when:
         // - Curernt window: EMA_38 < EMA_100
         // - Previous window: EMA_38 >= EMA_100
-        let result = if current_ema_38 < current_ema_100 && previous_ema_38 >= previous_ema_100 {
-            Some((BreakoutType::Bearish, (previous_ema_38, previous_ema_100)))
-        } else if current_ema_38 > current_ema_100 && previous_ema_38 <= previous_ema_100 {
-            Some((BreakoutType::Bullish, (previous_ema_38, previous_ema_100)))
+        // Special case of event when windows start
+        self.current_emas = (new_ema_38, new_ema_100);
+        if self.sequence_number > 0 {
+            let ts = Utc.timestamp_opt(new_start_time, 0).unwrap();
+            let result = if new_ema_38 < new_ema_100 && current_ema_38 >= current_ema_100 {
+                println!("[{}] Bearish because Current: [{} < {}] and Previous [{} >= {}]", ts, new_ema_38, new_ema_100, current_ema_38, current_ema_100);
+                Some((BreakoutType::Bearish, (current_ema_38, current_ema_38)))
+            } else if new_ema_38 > new_ema_100 && current_ema_38 <= current_ema_100 {
+                println!("[{}] Bullish because Current: [{} > {}] and Previous [{} <= {}]", ts, new_ema_38, new_ema_100, current_ema_38, current_ema_100);
+                Some((BreakoutType::Bullish, (current_ema_38, current_ema_100)))
+            } else {
+                None
+            };
+            self.sequence_number += 1;
+            result
         } else {
+            self.sequence_number += 1;
             None
-        };
+        }
 
-        self.previous = (current_ema_38, current_ema_100);
 
-        result
     }
 }
 
@@ -234,52 +244,23 @@ impl TickEventManager {
             return None;
         }
 
-        // Write previous windows if the gap is jlarge
-        // let empty_windows = round_up(trading_timestamp - window.end_time, 300) / 300 - 1;
-
-        // Skip the last window (since it contains new values)
-        // for i in 0..empty_windows {
-        //     let write_query = EmaResult {
-        //         // Slow clone!?
-        //         id: tick_event.id.clone(),
-        //         calc_38: window.previous.0,
-        //         calc_100: window.previous.1,
-        //         time: Utc
-        //             .timestamp_opt(
-        //                 round_up(tick_event.trading_timestamp.unwrap() as i64, 300) - 300 * i,
-        //                 0,
-        //             )
-        //             .unwrap(),
-        //         equity_type: tick_event.equity_type.clone(),
-        //         first: window.last,
-        //         last: window.last,
-        //         max: window.last,
-        //         min: window.last,
-        //     }
-        //     .into_query("trading_bucket");
-        //     self.influx_client
-        //         .query(write_query)
-        //         .await
-        //         .expect("Unable to write empty window");
-        // }
-
         window.last = last;
         let window_first = window.first;
         let window_last = window.last;
         let window_max = window.max;
         let window_min = window.min;
 
-        let breakout = window.tumble(trading_timestamp, tick_event.last.unwrap());
+        let breakout = window.tumble(
+            round_up(trading_timestamp as i64, 300) - 300,
+            last,
+        );
         let ema_result = EmaResult {
             // Slow clone!?
             id: tick_event.id.clone(),
-            calc_38: window.previous.0,
-            calc_100: window.previous.1,
+            calc_38: window.current_emas.0,
+            calc_100: window.current_emas.1,
             time: Utc
-                .timestamp_opt(
-                    round_up(tick_event.trading_timestamp.unwrap() as i64, 300) - 300,
-                    0,
-                )
+                .timestamp_opt(round_up(trading_timestamp as i64, 300) - 300, 0)
                 .unwrap(),
             equity_type: tick_event.equity_type,
             first: window_first,
@@ -290,10 +271,10 @@ impl TickEventManager {
         if let Some(b) = breakout {
             let breakout = Breakout::new(
                 tick_event.id,
-                round_up(tick_event.trading_timestamp.unwrap() as i64, 300) - 300,
+                round_up(trading_timestamp as i64, 300) - 300,
                 b.0,
                 b.1,
-                window.previous,
+                window.current_emas,
             );
             Some((ema_result, Some(breakout)))
         } else {
@@ -308,8 +289,7 @@ async fn start_core_nats_loop<T: AsRef<str>>(
 ) -> Result<()> {
     let (tx, mut rx) = mpsc::channel::<(EmaResult, Option<Breakout>)>(1000);
 
-    let influx_client =
-        Client::new("http://localhost:8086", "trading_bucket").with_token("token");
+    let influx_client = Client::new("http://localhost:8086", "trading_bucket").with_token("token");
     println!(
         "Connected to InfluxDB server: name={} url={}",
         influx_client.database_name(),
@@ -317,17 +297,50 @@ async fn start_core_nats_loop<T: AsRef<str>>(
     );
 
     tokio::spawn(async move {
+        // TODO: Handle when buffer lenght is not 500
         let mut buffer = Vec::with_capacity(500);
-        while let Some(i) = rx.recv().await {
-            buffer.push(i);
-            if buffer.len() == 500 {
+        let my_duration = tokio::time::Duration::from_millis(500);
+        loop {
+            while let Ok(i) = timeout(my_duration, rx.recv()).await {
+                if let Some(tmp) = i {
+                    buffer.push(tmp);
+                    if buffer.len() == 500 {
+                        let windows = buffer.drain(..);
+                        let (windows, breakouts): (Vec<EmaResult>, Vec<Option<Breakout>>) =
+                            windows.into_iter().unzip();
+                        let windows = windows
+                            .into_iter()
+                            .map(|w| w.into_query("trading_bucket"))
+                            .collect::<Vec<WriteQuery>>();
+                        let breakouts = breakouts
+                            .into_iter()
+                            .filter(|b| b.is_some())
+                            .map(|b| b.unwrap())
+                            .map(|b| b.into_query("breakout"))
+                            .collect::<Vec<WriteQuery>>();
+                        influx_client.query(windows).await.unwrap();
+                        influx_client.query(breakouts).await.unwrap();
+                    }
+                }
+            }
+            if !buffer.is_empty() {
                 let windows = buffer.drain(..);
-                let (windows, breakouts): (Vec<EmaResult>, Vec<Option<Breakout>>) = windows.into_iter().unzip();
-                let windows = windows.into_iter().map(|w| w.into_query("trading_bucket")).collect::<Vec<WriteQuery>>();
-                let breakouts = breakouts.into_iter().filter(|b| b.is_some()).map(|b| b.unwrap()).map(|b| b.into_query("breakout")).collect::<Vec<WriteQuery>>();
+                let (windows, breakouts): (Vec<EmaResult>, Vec<Option<Breakout>>) =
+                    windows.into_iter().unzip();
+                let windows = windows
+                    .into_iter()
+                    .map(|w| w.into_query("trading_bucket"))
+                    .collect::<Vec<WriteQuery>>();
+                let breakouts = breakouts
+                    .into_iter()
+                    .filter(|b| b.is_some())
+                    .map(|b| b.unwrap())
+                    .map(|b| b.into_query("breakout"))
+                    .collect::<Vec<WriteQuery>>();
                 influx_client.query(windows).await.unwrap();
                 influx_client.query(breakouts).await.unwrap();
             }
+            continue;
         }
     });
 
@@ -336,7 +349,6 @@ async fn start_core_nats_loop<T: AsRef<str>>(
         .await
         .map_err(|_| anyhow!("Could not subscribe to 'event"))?;
     println!("Subscribed to {}", exchange.as_ref());
-
 
     let mut manager = TickEventManager::new();
 
