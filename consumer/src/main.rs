@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
 use bincode;
-use chrono::{DateTime, TimeZone, Timelike, Utc};
+use chrono::{round, DateTime, TimeZone, Timelike, Utc};
 use clap::Parser;
 use futures::StreamExt;
 use influxdb::{Client, InfluxDbWriteable};
@@ -17,11 +17,6 @@ use async_nats::jetstream::consumer::PullConsumer;
 
 const EMA_38: f32 = 38.0;
 const EMA_100: f32 = 100.0;
-
-
-fn round_down(number: i64, multiplier: i64) -> i64 { 
-    number - (number % multiplier)
-}
 
 fn round_up(number: i64, multiplier: i64) -> i64 {
     ((number + multiplier - 1) / multiplier * multiplier) as i64
@@ -40,7 +35,6 @@ impl TickEvent {
         if self.last.is_none() || self.trading_timestamp.is_none() {
             return false;
         }
-        // println!("{:#?}", self);
 
         let result = match self.trading_timestamp {
             Some(t) => {
@@ -83,26 +77,23 @@ struct Breakout {
     tags: String,
     time: DateTime<Utc>,
     title: String,
-    text: String,
 }
 
 impl Breakout {
-    fn new(id: String, time: i64, btype: BreakoutType) -> Breakout {
+    fn new(id: String, time: i64, btype: BreakoutType, previous: (f32, f32), current: (f32, f32)) -> Breakout {
         let time = Utc.timestamp_opt(time, 0).unwrap();
         let breakout = match btype {
             BreakoutType::Bullish => Breakout {
                 id: id.clone(),
-                text: format!("Bullish event for {}", id),
                 time,
-                title: "Bullish breakout event".to_string(),
-                tags: "bullish".to_string()
+                title: format!("Bullish event (BUY BUY BUY!) for {} due to: WindowCurrent({} > {}) AND WindowPrevious({} <= {})", id, current.0, current.1, previous.0, previous.1),
+                tags: "bullish".to_string(),
             },
             BreakoutType::Bearish => Breakout {
                 id: id.clone(),
-                text: format!("Bearish event for {}", id),
                 time,
-                title: "Bearish breakout event".to_string(),
-                tags: "bearish".to_string()
+                title: format!("Bearish event for {} due to WindowCurrent({} < {}) AND WindowPrevious({} >= {})", id, current.0, current.1, previous.0, previous.1),
+                tags: "bearish".to_string(),
             },
         };
         breakout
@@ -165,27 +156,32 @@ impl Window {
         }
     }
 
-    fn tumble(&mut self, new_start_time: i64, last_price: f32) -> Option<BreakoutType> {
-        let current = self.ema.calc(last_price, self.previous);
+    fn tumble(&mut self, new_start_time: i64, last_price: f32) -> Option<(BreakoutType, (f32, f32))> {
+        // (ema_38, ema_100)
+        let (current_ema_38, current_ema_100) = self.ema.calc(last_price, self.previous);
+        let (previous_ema_38, previous_ema_100) = self.previous;
         self.start_time = new_start_time;
-        self.end_time = round_up(self.start_time,  300) - 300;
+        self.end_time = round_up(self.start_time, 300) - 300;
         self.sequence_number += 1;
 
         // Update values for candlestick chart
         self.first = last_price;
-        self.last = 0.0; 
+        self.last = 0.0;
         self.max = last_price;
         self.min = last_price;
 
-        let result = if current.0 < current.1 && self.previous.0 > self.previous.1 {
-            Some(BreakoutType::Bearish)
-        } else if current.0 > current.1 && self.previous.0 < self.previous.1 {
-            Some(BreakoutType::Bullish)
+        // A bearish breakout event occurs when:
+        // - Curernt window: EMA_38 < EMA_100
+        // - Previous window: EMA_38 >= EMA_100
+        let result = if current_ema_38 < current_ema_100 && previous_ema_38 >= previous_ema_100 {
+            Some((BreakoutType::Bearish, (previous_ema_38, previous_ema_100)))
+        } else if current_ema_38 > current_ema_100 && previous_ema_38 <= previous_ema_100 {
+            Some((BreakoutType::Bullish, (previous_ema_38, previous_ema_100)))
         } else {
             None
         };
 
-        self.previous = current;
+        self.previous = (current_ema_38, current_ema_100);
 
         result
     }
@@ -233,30 +229,33 @@ impl TickEventManager {
 
         if window.end_time < trading_timestamp {
             // Write previous windows if the gap is jlarge
-            // let empty_windows = ((trading_timestamp - window.end_time) as f32 / 300.0).ceil() as u32 - 1;
+            let empty_windows = round_up(trading_timestamp - window.end_time, 300) / 300 - 1;
 
-            // // Skip the last window (since it contains new values)
-            // for _ in 0..empty_windows {
-            //     let write_query = EmaResult {
-            //         // Slow clone!?
-            //         id: tick_event.id.clone(),
-            //         calc_38: window.previous.0,
-            //         calc_100: window.previous.1,
-            //         time: Utc
-            //             .timestamp_opt(round_down(tick_event.trading_timestamp.unwrap() as i64, 300), 0)
-            //             .unwrap(),
-            //         equity_type: tick_event.equity_type.clone(),
-            //         first: window.last,
-            //         last: window.last,
-            //         max: window.last,
-            //         min: window.last,
-            //     }
-            //     .into_query("trading_bucket");
-            //     self.influx_client
-            //         .query(write_query)
-            //         .await
-            //         .expect("Unable to write empty window");
-            // }
+            // Skip the last window (since it contains new values)
+            for i in 0..empty_windows {
+                let write_query = EmaResult {
+                    // Slow clone!?
+                    id: tick_event.id.clone(),
+                    calc_38: window.previous.0,
+                    calc_100: window.previous.1,
+                    time: Utc
+                        .timestamp_opt(
+                            round_up(tick_event.trading_timestamp.unwrap() as i64, 300) - 300 * i,
+                            0,
+                        )
+                        .unwrap(),
+                    equity_type: tick_event.equity_type.clone(),
+                    first: window.last,
+                    last: window.last,
+                    max: window.last,
+                    min: window.last,
+                }
+                .into_query("trading_bucket");
+                self.influx_client
+                    .query(write_query)
+                    .await
+                    .expect("Unable to write empty window");
+            }
 
             window.last = last;
             let window_first = window.first;
@@ -271,7 +270,10 @@ impl TickEventManager {
                 calc_38: window.previous.0,
                 calc_100: window.previous.1,
                 time: Utc
-                    .timestamp_opt(round_up(tick_event.trading_timestamp.unwrap() as i64, 300) - 300, 0)
+                    .timestamp_opt(
+                        round_up(tick_event.trading_timestamp.unwrap() as i64, 300) - 300,
+                        0,
+                    )
                     .unwrap(),
                 equity_type: tick_event.equity_type,
                 first: window_first,
@@ -285,17 +287,19 @@ impl TickEventManager {
                 .await
                 .expect("Unable to write window");
 
-            match breakout {
-                Some(b) => {
-                    let breakout = Breakout::new(tick_event.id, round_up(tick_event.trading_timestamp.unwrap() as i64, 300) - 300, b);
-                    self.influx_client
-                        .query(breakout.into_query("breakout"))
-                        .await
-                        .expect("Unable to write breakout event");
-                }
-                None => {}
+            if let Some(b) = breakout {
+                let breakout = Breakout::new(
+                    tick_event.id,
+                    round_up(tick_event.trading_timestamp.unwrap() as i64, 300) - 300,
+                    b.0,
+                    b.1,
+                    window.previous
+                );
+                self.influx_client
+                    .query(breakout.into_query("breakout"))
+                    .await
+                    .expect("Unable to write breakout event");
             }
-
         }
     }
 }
@@ -389,14 +393,16 @@ async fn consumer<T: AsRef<str>>(exchange: T, mode: NatsMode) -> Result<()> {
             Ok(())
         }
     }
-
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    println!("=== Config begin ===\npartition={:#?}\nnats_mode={:#?}\n=== Config end   ===\n", cli.partition, cli.nats_mode);
+    println!(
+        "=== Config begin ===\npartition={:#?}\nnats_mode={:#?}\n=== Config end   ===\n",
+        cli.partition, cli.nats_mode
+    );
 
     match cli.partition {
         Partition::Global => consumer("exchange", cli.nats_mode).await?,
@@ -408,7 +414,7 @@ async fn main() -> Result<()> {
                 tokio::spawn(async move { consumer("exchange.ETR", cli.nats_mode).await }),
             );
         }
-        Partition::Hash => { },
+        Partition::Hash => {}
     }
 
     Ok(())

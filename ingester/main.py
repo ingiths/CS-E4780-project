@@ -119,6 +119,7 @@ def ingest(
 
     async def async_ingest():
         nc = await nats.connect("nats://localhost:4222")
+        print(files)
         for file in files:
             file_trading_date = datetime.datetime.strptime(
                 file[32:40], "%d-%m-%y"
@@ -153,83 +154,9 @@ def ingest(
 
     asyncio.run(async_ingest())
 
-
 @app.command()
-def explore(
-    file: str,
-    entity: str | None = None,
-):
-    file_trading_date = datetime.datetime.strptime(file[32:40], "%d-%m-%y").date()
-    print(f"Reading file {file}")
-
-    start = time.time()
-    q = pl.scan_csv(file, comment_prefix="#", separator=",").select(
-        "ID", "SecType", "Last", "Trading time"
-    )
-    if entity:
-        q = q.filter(pl.col("ID") == entity)
-
-    df = q.collect()
-    df = df.with_columns(pl.lit(file_trading_date).alias("Trading date"))
-    end = time.time()
-    print(f"Read {file} in {round(end - start, 2)} seconds, shape: {df.shape}.")
-
-    print(df)
-
-
-@app.command()
-def plot_events(csv_file: str, id: str) -> None:
-    """
-    Plot 5 minute windows of last prices
-
-    Used for debugging and data exploration
-    """
-    trading_date = str(datetime.datetime.strptime(csv_file[32:40], "%d-%m-%y").date())
-
-    df = pd.read_csv(
-        csv_file,
-        sep=",",
-        comment="#",
-        names=["ID", "SecType", "Last", "Trading time"],
-        header=0,
-        usecols=[0, 1, 21, 23],
-    )
-    df = df.dropna()
-    df["Last"] = pd.to_numeric(df["Last"], errors="coerce")
-
-    df["Trading time"] = pd.to_datetime(
-        trading_date + " " + df["Trading time"],
-        format="%Y-%m-%d %H:%M:%S.%f",
-        errors="coerce",
-    )
-
-    df_filtered = df[
-        df["Last"].notna()
-        & (df["Last"] != 0)
-        & (df["ID"] == id)
-        & (df["SecType"] == "I")
-    ]
-
-    if len(df_filtered) == 0:
-        print("No valid last price data found in the dataset")
-        return None
-
-    df_windowed = df_filtered.set_index("Trading time").resample("5T")["Last"].last()
-
-    plt.figure(figsize=(12, 6))
-    sns.set_style("whitegrid")
-
-    plt.plot(df_windowed.index, df_windowed.values, label=id, marker="o")  # type: ignore
-
-    plt.title(f"Last Trading Prices (5-min windows) for {id} on {trading_date}")
-    plt.xlabel("Time")
-    plt.ylabel("Last Price")
-    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
-
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.show()
-
+def dummy():
+    pass
 
 if __name__ == "__main__":
     app()
