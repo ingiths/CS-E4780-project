@@ -2,13 +2,40 @@ services:
   nats:
     image: nats:2.10.22
     ports:
-      - "127.0.0.1:4222:4222"
-      - "127.0.0.1:8222:8222"
-      - "127.0.0.1:6222:6222"
+      - "127.0.0.1:4222:4222"  # Client connections
+      - "127.0.0.1:8222:8222"  # HTTP management
+      - "127.0.0.1:6222:6222"  # Clustering
     environment:
       - NATS_SERVER_NAME=nats-server
       - NATS_CLUSTER_NAME=trading-cluster
+    command:
+      - "--max_payload=8MB"            # Increase max message size
+      - "--max_connections=100000"     # Increase max connections
+      - "--max_control_line=4KB"       # Control line buffer
+      - "--max_pending=256MB"          # Pending messages buffer
+      - "--write_deadline=2s"          # Write deadline
+      - "--max_subscriptions=100000"   # Max subscriptions per connection
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     networks:
       - trading-network
     depends_on:
       - influxdb
+
+volumes:
+  nats-data:
+  nats-config:
+
+networks:
+  trading-network:
+    driver: bridge

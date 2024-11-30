@@ -167,6 +167,7 @@ impl Window {
 
     fn tumble(
         &mut self,
+        id: &String,
         new_start_time: i64,
         last_price: f32,
     ) -> Option<(BreakoutType, (f32, f32))> {
@@ -190,10 +191,10 @@ impl Window {
         if self.sequence_number > 0 {
             let ts = Utc.timestamp_opt(new_start_time, 0).unwrap();
             let result = if new_ema_38 < new_ema_100 && current_ema_38 >= current_ema_100 {
-                println!("[{}] Bearish because Current: [{} < {}] and Previous [{} >= {}]", ts, new_ema_38, new_ema_100, current_ema_38, current_ema_100);
+                println!("[{}] {} Bearish because Current: [{} < {}] and Previous [{} >= {}]", id, ts, new_ema_38, new_ema_100, current_ema_38, current_ema_100);
                 Some((BreakoutType::Bearish, (current_ema_38, current_ema_38)))
             } else if new_ema_38 > new_ema_100 && current_ema_38 <= current_ema_100 {
-                println!("[{}] Bullish because Current: [{} > {}] and Previous [{} <= {}]", ts, new_ema_38, new_ema_100, current_ema_38, current_ema_100);
+                println!("[{}] {} Bullish because Current: [{} > {}] and Previous [{} <= {}]", id, ts, new_ema_38, new_ema_100, current_ema_38, current_ema_100);
                 Some((BreakoutType::Bullish, (current_ema_38, current_ema_100)))
             } else {
                 None
@@ -251,6 +252,7 @@ impl TickEventManager {
         let window_min = window.min;
 
         let breakout = window.tumble(
+            &tick_event.id,
             round_up(trading_timestamp as i64, 300) - 300,
             last,
         );
@@ -357,7 +359,7 @@ async fn start_core_nats_loop<T: AsRef<str>>(
     while let Some(message) = subscriber.next().await {
         let tick_event = bincode::deserialize::<TickEvent>(&message.payload)?;
         counter += 1;
-        if counter % 10000 == 0 {
+        if counter % 100 == 0 {
             print!("Counter: {}\r", counter);
             std::io::stdout().flush().unwrap();
         }
