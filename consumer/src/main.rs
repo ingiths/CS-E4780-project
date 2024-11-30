@@ -82,6 +82,56 @@ struct Breakout {
     title: String,
 }
 
+#[derive(InfluxDbWriteable, Debug)]
+struct Performance {
+    #[influxdb(tag)]
+    id: String,
+    #[influxdb(tag)]
+    window_number: u32,
+    time: DateTime<Utc>,
+    window_creation_start: i64,
+    window_creation_end: i64,
+    // Invariant: window_creation_end = influx_write_start
+    influx_write_end: i64,
+}
+
+impl Performance {
+    fn new<T: Into<String>>(id: T, window_number: u32) -> Performance {
+        Performance {
+            id: id.into(),
+            window_number,
+            time: Utc::now(),
+            window_creation_start: 0,
+            window_creation_end: 0,
+            influx_write_end: 0,
+        }
+    }
+
+    fn set_window_start(&mut self) {
+        self.window_creation_start = Utc::now().timestamp_millis();
+    }
+
+    fn set_window_end(&mut self) {
+        self.window_creation_end = Utc::now().timestamp_millis();
+    }
+}
+
+struct InfluxResults {
+    ema: EmaResult,
+    breakout: Option<Breakout>,
+    perf: Performance,
+}
+
+impl InfluxResults {
+    fn new(ema: EmaResult, breakout: Option<Breakout>, perf: Performance) -> InfluxResults {
+        InfluxResults {
+            ema,
+            breakout,
+            perf,
+        }
+    }
+}
+
 impl Breakout {
     fn new(
         id: String,
@@ -189,12 +239,12 @@ impl Window {
         // Special case of event when windows start
         self.current_emas = (new_ema_38, new_ema_100);
         if self.sequence_number > 0 {
-            let ts = Utc.timestamp_opt(new_start_time, 0).unwrap();
+            // let ts = Utc.timestamp_opt(new_start_time, 0).unwrap();
             let result = if new_ema_38 < new_ema_100 && current_ema_38 >= current_ema_100 {
-                println!("[{}] {} Bearish because Current: [{} < {}] and Previous [{} >= {}]", id, ts, new_ema_38, new_ema_100, current_ema_38, current_ema_100);
+                // println!("[{}] {} Bearish because Current: [{} < {}] and Previous [{} >= {}]", id, ts, new_ema_38, new_ema_100, current_ema_38, current_ema_100);
                 Some((BreakoutType::Bearish, (current_ema_38, current_ema_38)))
             } else if new_ema_38 > new_ema_100 && current_ema_38 <= current_ema_100 {
-                println!("[{}] {} Bullish because Current: [{} > {}] and Previous [{} <= {}]", id, ts, new_ema_38, new_ema_100, current_ema_38, current_ema_100);
+                // println!("[{}] {} Bullish because Current: [{} > {}] and Previous [{} <= {}]", id, ts, new_ema_38, new_ema_100, current_ema_38, current_ema_100);
                 Some((BreakoutType::Bullish, (current_ema_38, current_ema_100)))
             } else {
                 None
@@ -205,8 +255,6 @@ impl Window {
             self.sequence_number += 1;
             None
         }
-
-
     }
 }
 
@@ -221,7 +269,7 @@ impl TickEventManager {
         }
     }
 
-    async fn update(&mut self, tick_event: TickEvent) -> Option<(EmaResult, Option<Breakout>)> {
+    async fn update(&mut self, tick_event: TickEvent) -> Option<InfluxResults> {
         let trading_timestamp = tick_event
             .trading_timestamp
             .expect("Got invalid tick event") as i64;
@@ -244,6 +292,9 @@ impl TickEventManager {
         if window.end_time >= trading_timestamp {
             return None;
         }
+
+        let mut perf = Performance::new(tick_event.id.clone(), window.sequence_number);
+        perf.set_window_start();
 
         window.last = last;
         let window_first = window.first;
@@ -278,9 +329,11 @@ impl TickEventManager {
                 b.1,
                 window.current_emas,
             );
-            Some((ema_result, Some(breakout)))
+            perf.set_window_end();
+            Some(InfluxResults::new(ema_result, Some(breakout), perf))
         } else {
-            Some((ema_result, None))
+            perf.set_window_end();
+            Some(InfluxResults::new(ema_result, None, perf))
         }
     }
 }
@@ -289,7 +342,7 @@ async fn start_core_nats_loop<T: AsRef<str>>(
     exchange: T,
     nats_client: async_nats::Client,
 ) -> Result<()> {
-    let (tx, mut rx) = mpsc::channel::<(EmaResult, Option<Breakout>)>(1000);
+    let (tx, mut rx) = mpsc::channel::<InfluxResults>(1000);
 
     let influx_client = Client::new("http://localhost:8086", "trading_bucket").with_token("token");
     println!(
@@ -300,47 +353,62 @@ async fn start_core_nats_loop<T: AsRef<str>>(
 
     tokio::spawn(async move {
         // TODO: Handle when buffer lenght is not 500
-        let mut buffer = Vec::with_capacity(500);
-        let my_duration = tokio::time::Duration::from_millis(500);
+        let mut buffer = Vec::with_capacity(1000);
+        let my_duration = tokio::time::Duration::from_millis(1000);
         loop {
             while let Ok(i) = timeout(my_duration, rx.recv()).await {
                 if let Some(tmp) = i {
                     buffer.push(tmp);
                     if buffer.len() == 500 {
-                        let windows = buffer.drain(..);
-                        let (windows, breakouts): (Vec<EmaResult>, Vec<Option<Breakout>>) =
-                            windows.into_iter().unzip();
-                        let windows = windows
+                        let mut window_writes = Vec::with_capacity(buffer.len());
+                        let mut breakout_writes = Vec::with_capacity(buffer.len());
+                        let mut perf_writes = Vec::with_capacity(buffer.len());
+                        buffer.drain(..).into_iter().for_each(|influx_result| {
+                            window_writes.push(influx_result.ema.into_query("trading_bucket"));
+                            if influx_result.breakout.is_some() {
+                                breakout_writes
+                                    .push(influx_result.breakout.unwrap().into_query("breakout"));
+                            }
+                            perf_writes.push(influx_result.perf);
+                        });
+                        influx_client.query(window_writes).await.unwrap();
+                        let write_end = Utc::now().timestamp_millis();
+                        let perf_writes = perf_writes
                             .into_iter()
-                            .map(|w| w.into_query("trading_bucket"))
+                            .map(|mut p| {
+                                p.influx_write_end = write_end;
+                                p.into_query("perf")
+                            })
                             .collect::<Vec<WriteQuery>>();
-                        let breakouts = breakouts
-                            .into_iter()
-                            .filter(|b| b.is_some())
-                            .map(|b| b.unwrap())
-                            .map(|b| b.into_query("breakout"))
-                            .collect::<Vec<WriteQuery>>();
-                        influx_client.query(windows).await.unwrap();
-                        influx_client.query(breakouts).await.unwrap();
+                        influx_client.query(breakout_writes).await.unwrap();
+                        influx_client.query(perf_writes).await.unwrap();
                     }
                 }
             }
+            // Timeout of
             if !buffer.is_empty() {
-                let windows = buffer.drain(..);
-                let (windows, breakouts): (Vec<EmaResult>, Vec<Option<Breakout>>) =
-                    windows.into_iter().unzip();
-                let windows = windows
+                let mut window_writes = Vec::with_capacity(buffer.len());
+                let mut breakout_writes = Vec::with_capacity(buffer.len());
+                let mut perf_writes = Vec::with_capacity(buffer.len());
+                buffer.drain(..).into_iter().for_each(|influx_result| {
+                    window_writes.push(influx_result.ema.into_query("trading_bucket"));
+                    if influx_result.breakout.is_some() {
+                        breakout_writes
+                            .push(influx_result.breakout.unwrap().into_query("breakout"));
+                    }
+                    perf_writes.push(influx_result.perf);
+                });
+                influx_client.query(window_writes).await.unwrap();
+                let write_end = Utc::now().timestamp_millis();
+                let perf_writes = perf_writes
                     .into_iter()
-                    .map(|w| w.into_query("trading_bucket"))
+                    .map(|mut p| {
+                        p.influx_write_end = write_end;
+                        p.into_query("perf")
+                    })
                     .collect::<Vec<WriteQuery>>();
-                let breakouts = breakouts
-                    .into_iter()
-                    .filter(|b| b.is_some())
-                    .map(|b| b.unwrap())
-                    .map(|b| b.into_query("breakout"))
-                    .collect::<Vec<WriteQuery>>();
-                influx_client.query(windows).await.unwrap();
-                influx_client.query(breakouts).await.unwrap();
+                influx_client.query(breakout_writes).await.unwrap();
+                influx_client.query(perf_writes).await.unwrap();
             }
             continue;
         }
