@@ -6,7 +6,7 @@ use std::io::prelude::*;
 
 use anyhow::{anyhow, Result};
 use bincode;
-use chrono::{DateTime, TimeZone, Timelike, Utc};
+use chrono::{TimeZone, Timelike, Utc};
 use clap::Parser;
 use futures::StreamExt;
 use influxdb::{Client, WriteQuery};
@@ -23,7 +23,7 @@ const EMA_38: f32 = 38.0;
 const EMA_100: f32 = 100.0;
 
 fn round_down(number: i64, multiplier: i64) -> i64 {
-    ((number + multiplier/2) / multiplier) * multiplier
+    ((number + multiplier / 2) / multiplier) * multiplier
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -115,7 +115,6 @@ impl Window {
         last_price: f32,
     ) -> Option<(BreakoutType, (f32, f32))> {
         // (ema_38, ema_100)
-        println!("Tumbling, previous window was from {} - {}", DateTime::from_timestamp_millis(self.start_time).unwrap(), DateTime::from_timestamp_millis(self.end_time).unwrap());
         let (new_ema_38, new_ema_100) = self.ema.calc(last_price, self.current_emas);
         let (current_ema_38, current_ema_100) = self.current_emas;
         self.start_time = new_start_time;
@@ -166,7 +165,6 @@ impl WindowManager {
             .expect("Got invalid tick event");
         let last = tick_event.last.unwrap();
 
-
         let window = self
             .windows
             .entry(tick_event.id.clone())
@@ -194,10 +192,7 @@ impl WindowManager {
         let window_max = window.max;
         let window_min = window.min;
 
-        let breakout = window.tumble(
-            round_down(trading_timestamp as i64, 300 * 1000),
-            last,
-        );
+        let breakout = window.tumble(round_down(trading_timestamp as i64, 300 * 1000), last);
         let mut result = InfluxResults::new(
             tick_event.id,
             round_down(trading_timestamp, 300 * 1000),
@@ -232,7 +227,7 @@ async fn start_core_nats_loop<T: AsRef<str>>(
     tokio::spawn(async move {
         // TODO: Handle when buffer lenght is not 500
         let mut buffer = Vec::with_capacity(1000);
-        let my_duration = tokio::time::Duration::from_millis(1000);
+        let my_duration = tokio::time::Duration::from_millis(500);
         loop {
             while let Ok(i) = timeout(my_duration, rx.recv()).await {
                 if let Some(tmp) = i {
@@ -302,15 +297,15 @@ async fn start_core_nats_loop<T: AsRef<str>>(
 
     let mut manager = WindowManager::new();
 
-    let mut counter = 0;
+    // let mut counter = 0;
 
     while let Some(message) = subscriber.next().await {
         let tick_event = bincode::deserialize::<TickEvent>(&message.payload)?;
-        counter += 1;
-        if counter % 100 == 0 {
-            print!("Counter: {}\r", counter);
-            std::io::stdout().flush()?;
-        }
+        // counter += 1;
+        // if counter % 100 == 0 {
+        //     print!("Counter: {}\r", counter);
+        //     std::io::stdout().flush()?;
+        // }
         if !tick_event.is_valid() {
             continue;
         }

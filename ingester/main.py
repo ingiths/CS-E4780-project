@@ -13,9 +13,10 @@ from alive_progress import alive_bar
 import typer
 
 
-class IngestionMode(Enum):
-    SEQUENTIAL = "sequential"
-    PARALLEL = "parallel"
+class Partition(Enum):
+    GLOBAL = "global"
+    EXCHANGE = "exchange"
+    ID = "id"
 
 
 def create_nats_message(
@@ -35,8 +36,6 @@ def create_nats_message(
             datetime.datetime.strptime(time, "%H:%M:%S.%f").time(),
             tzinfo=zoneinfo.ZoneInfo("UTC"),
         )
-        print(f"GABVA {datetime_combined} and {datetime_combined.timestamp()}")
-
         # Store millisecond precisison
         unix_ms = int(datetime_combined.timestamp() * 1000)
         # Avoid padding with <
@@ -68,11 +67,12 @@ app = typer.Typer()
 def ingest(
     files: list[str],
     entity: str | None = None,
-    ingestion_mode: IngestionMode = IngestionMode.SEQUENTIAL,
+    partition: Partition = Partition.GLOBAL,
 ):
     total_message_count = 0
 
     def preprocess_csv_file(file: str, entity: str | None = None) -> pl.DataFrame:
+        start = time.time()
         file_trading_date = datetime.datetime.strptime(file[32:40], "%d-%m-%y").date()
         print(f"Reading file {file}")
 
@@ -84,10 +84,13 @@ def ingest(
 
         df = q.collect()
         df = df.with_columns(pl.lit(file_trading_date).alias("Trading date"))
+        end = time.time()
+        print(f"Read {file} in {round(end - start, 2)} seconds, shape: {df.shape}.")
         return df
 
     async def nats_ingest(
         df: pl.DataFrame,
+        exchange: str,
         flush_interval: int | None = 1000,
         show_progress_bar: bool = False,
     ):
@@ -95,33 +98,55 @@ def ingest(
         if show_progress_bar:
             with alive_bar(len(df)) as bar:
                 for i, event in enumerate(df.iter_rows(named=False, buffer_size=1024)):
-                    await nc.publish("exchange", create_nats_message(*event))
+                    await nc.publish(exchange, create_nats_message(*event))
                     if flush_interval and i % flush_interval == 0:
                         await nc.flush()
                     bar()
         else:
             for i, event in enumerate(df.iter_rows(named=False, buffer_size=1024)):
-                await nc.publish("exchange", create_nats_message(*event))
+                await nc.publish(exchange, create_nats_message(*event))
                 if flush_interval and i % flush_interval == 0:
                     await nc.flush()
 
         await nc.flush()
         await nc.close()
 
-    async def sequential_ingest(file: str, entity: str | None):
-        start = time.time()
+    async def global_ingest(file: str, entity: str | None):
         df = preprocess_csv_file(file, entity=entity)
-        end = time.time()
-        print(f"Read {file} in {round(end - start, 2)} seconds, shape: {df.shape}.")
-
         print("Starting ingestion into NATS server")
-        await nats_ingest(df, show_progress_bar=True)
+        await nats_ingest(df, "exchange", show_progress_bar=True)
 
-    async def parallel_ingest(file: str):
-        start = time.time()
+    async def ingest_by_exchange(file: str):
         df = preprocess_csv_file(file)
+        exchanges = {}
+        print("Splitting dataframe by exchange...")
+        exchanges['ETR'] = df.filter(pl.col("ID").str.ends_with("ETR"))
+        exchanges['FR'] = df.filter(pl.col("ID").str.ends_with("FR"))
+        exchanges['NL'] = df.filter(pl.col("ID").str.ends_with("NL"))
+        del df
+        gc.collect()
+
+        tasks = []
+        message_count = 0
+        for exchange, df in list(exchanges.items()):
+            print(f"Spawning task for {exchange} - ingesting {len(df)} events to exchange.{exchange}")
+            message_count += len(df)
+            tasks.append(asyncio.create_task(nats_ingest(df, f"exchange.{exchange}")))
+
+        print(f"Sending {message_count} message")
+        start = time.time()
+        await asyncio.gather(*tasks)
         end = time.time()
-        print(f"Read {file} in {round(end - start, 2)} seconds, shape: {df.shape}.")
+        time_taken = round(end - start, 2)
+        print(
+            f"Sent {message_count} messages took {time_taken} seconds, {round(message_count / time_taken, 2)} message/s"
+        )
+        nonlocal total_message_count
+        total_message_count += message_count
+        print(f"Total messages sent: {total_message_count}")
+
+    async def ingest_by_id(file: str):
+        df = preprocess_csv_file(file)
         # Split dataframes by ID
         split_dfs = {}
         unique_ids = df["ID"].unique().sort().to_list()[:250]
@@ -140,7 +165,7 @@ def ingest(
         for id, df in list(split_dfs.items()):
             print(f"Spawning task for {id} - ingesting {len(df)} events")
             message_count += len(df)
-            tasks.append(asyncio.create_task(nats_ingest(df)))
+            tasks.append(asyncio.create_task(nats_ingest(df, id)))
 
         # Wait for all tasks to complete before moving to next file
         print(f"Sending {message_count} message")
@@ -157,14 +182,20 @@ def ingest(
 
     # Run the async function
     for file in files:
-        if ingestion_mode == IngestionMode.PARALLEL:
-            print("Running parallel ingestion, tasks will be spawned")
-            asyncio.run(parallel_ingest(file))
-        elif ingestion_mode == IngestionMode.SEQUENTIAL:
-            print("Running sequential ingestion, no tasks will be spawned")
-            asyncio.run(sequential_ingest(file, entity=entity))
+        start = time.time()
+        if partition == Partition.GLOBAL:
+            print("Running single producer, no tasks will be spawned")
+            asyncio.run(global_ingest(file, entity=entity))
+        elif partition == Partition.EXCHANGE:
+            print("Running 3 producers, 3 tasks will be created: [ETR, FR, NL]")
+            asyncio.run(ingest_by_exchange(file))
+        elif partition == Partition.ID:
+            print("Running as many producers as there are unique IDs in the data")
+            asyncio.run(ingest_by_id(file))
         else:
             raise ValueError("Invalid ingestion_mode")
+        end = time.time()
+        print(f"It took {round(end - start, 2)} seconds to process {file}")
 
 
 @app.command()
