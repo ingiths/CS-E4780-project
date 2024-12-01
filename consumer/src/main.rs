@@ -2,7 +2,6 @@ mod cli;
 mod influx;
 
 use std::collections::HashMap;
-use std::io::prelude::*;
 
 use anyhow::{anyhow, Result};
 use bincode;
@@ -58,6 +57,7 @@ impl TickEvent {
     }
 }
 
+#[derive(Clone)]
 struct EMA {
     ema_38: f32,
     ema_100: f32,
@@ -80,6 +80,7 @@ impl EMA {
     }
 }
 
+#[derive(Clone)]
 struct Window {
     ema: EMA,
     sequence_number: u32,
@@ -91,6 +92,7 @@ struct Window {
     last: f32,  // Price of window closing
     max: f32,   // Max value of window
     min: f32,   // Min value of window
+    movements: u32,
 }
 
 impl Window {
@@ -106,6 +108,7 @@ impl Window {
             last: 0.0,
             max: price,
             min: price,
+            movements: 0,
         }
     }
 
@@ -116,7 +119,7 @@ impl Window {
     ) -> Option<(BreakoutType, (f32, f32))> {
         // (ema_38, ema_100)
         let (new_ema_38, new_ema_100) = self.ema.calc(last_price, self.current_emas);
-        let (current_ema_38, current_ema_100) = self.current_emas;
+        let (old_ema_38, old_ema_100) = self.current_emas;
         self.start_time = new_start_time;
         self.end_time = self.start_time + 300 * 1000;
 
@@ -125,6 +128,7 @@ impl Window {
         self.last = 0.0;
         self.max = last_price;
         self.min = last_price;
+        self.movements = 0;
 
         // A bearish breakout event occurs when:
         // - Current window: EMA_38 < EMA_100
@@ -132,10 +136,10 @@ impl Window {
         // Special case of event when windows start
         self.current_emas = (new_ema_38, new_ema_100);
         if self.sequence_number > 0 {
-            let result = if new_ema_38 < new_ema_100 && current_ema_38 >= current_ema_100 {
-                Some((BreakoutType::Bearish, (current_ema_38, current_ema_38)))
-            } else if new_ema_38 > new_ema_100 && current_ema_38 <= current_ema_100 {
-                Some((BreakoutType::Bullish, (current_ema_38, current_ema_100)))
+            let result = if new_ema_38 < new_ema_100 && old_ema_38 >= old_ema_100 {
+                Some((BreakoutType::Bearish, (old_ema_38, old_ema_38)))
+            } else if new_ema_38 > new_ema_100 && old_ema_38 <= old_ema_100 {
+                Some((BreakoutType::Bullish, (old_ema_38, old_ema_100)))
             } else {
                 None
             };
@@ -169,6 +173,8 @@ impl WindowManager {
             .windows
             .entry(tick_event.id.clone())
             .or_insert_with(|| Window::new(round_down(trading_timestamp, 300 * 1000), last));
+        
+        window.movements += 1;
 
         // Does not update when this window is created
         if window.max < last {
@@ -191,6 +197,7 @@ impl WindowManager {
         let window_last = window.last;
         let window_max = window.max;
         let window_min = window.min;
+        let movements = window.movements;
 
         let breakout = window.tumble(round_down(trading_timestamp as i64, 300 * 1000), last);
         let mut result = InfluxResults::new(
@@ -203,6 +210,7 @@ impl WindowManager {
             window_max,
             window_min,
             breakout,
+            movements,
         );
         result.record_window_start(start);
         result.record_window_end(Utc::now().timestamp_millis());
@@ -230,8 +238,8 @@ async fn start_core_nats_loop<T: AsRef<str>>(
         let my_duration = tokio::time::Duration::from_millis(500);
         loop {
             while let Ok(i) = timeout(my_duration, rx.recv()).await {
-                if let Some(tmp) = i {
-                    buffer.push(tmp);
+                if let Some(influx_result) = i {
+                    buffer.push(influx_result);
                     if buffer.len() == 500 {
                         let mut window_writes = Vec::with_capacity(buffer.len());
                         let mut breakout_writes = Vec::with_capacity(buffer.len());
@@ -259,7 +267,7 @@ async fn start_core_nats_loop<T: AsRef<str>>(
                     }
                 }
             }
-            // Timeout of
+            // Timeout of 500 ms, flush buffer if not empty
             if !buffer.is_empty() {
                 let mut window_writes = Vec::with_capacity(buffer.len());
                 let mut breakout_writes = Vec::with_capacity(buffer.len());

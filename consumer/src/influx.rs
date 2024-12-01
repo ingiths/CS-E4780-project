@@ -71,10 +71,11 @@ pub struct Performance {
     window_creation_end: i64,
     // Invariant: window_creation_end = influx_write_start
     pub influx_write_end: i64,
+    movements: u32
 }
 
 impl Performance {
-    fn new<T: Into<String>>(id: T, window_number: u32) -> Performance {
+    fn new<T: Into<String>>(id: T, window_number: u32, movements: u32) -> Performance {
         Performance {
             id: id.into(),
             window_number,
@@ -82,6 +83,7 @@ impl Performance {
             window_creation_start: 0,
             window_creation_end: 0,
             influx_write_end: 0,
+            movements
         }
     }
 
@@ -107,8 +109,9 @@ impl InfluxResults {
         window_max: f32,
         window_min: f32,
         breakout: Option<(BreakoutType, (f32, f32))>,
+        movements: u32,
     ) -> InfluxResults {
-        let perf = Performance::new(id.clone(), window.sequence_number);
+        let perf = Performance::new(id.clone(), window.sequence_number, movements);
         let ema = EmaResult {
             id: id.clone(),
             calc_38: window.current_emas.0,
