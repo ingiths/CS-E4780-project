@@ -1,4 +1,5 @@
 mod cli;
+mod influx;
 
 use std::collections::HashMap;
 use std::io::prelude::*;
@@ -8,27 +9,27 @@ use bincode;
 use chrono::{DateTime, TimeZone, Timelike, Utc};
 use clap::Parser;
 use futures::StreamExt;
-use influxdb::{Client, InfluxDbWriteable, WriteQuery};
+use influxdb::{Client, WriteQuery};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use cli::{Cli, NatsMode, Partition};
 
-use async_nats::jetstream;
-use async_nats::jetstream::consumer::PullConsumer;
 use tokio::time::timeout;
+
+use influx::{BreakoutType, InfluxResults};
 
 const EMA_38: f32 = 38.0;
 const EMA_100: f32 = 100.0;
 
-fn round_up(number: i64, multiplier: i64) -> i64 {
-    ((number + multiplier - 1) / multiplier * multiplier) as i64
+fn round_down(number: i64, multiplier: i64) -> i64 {
+    ((number + multiplier/2) / multiplier) * multiplier
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TickEvent {
     last: Option<f32>,
-    trading_timestamp: Option<u32>,
+    trading_timestamp: Option<i64>,
     id: String,
     equity_type: String,
 }
@@ -41,7 +42,7 @@ impl TickEvent {
 
         let result = match self.trading_timestamp {
             Some(t) => {
-                let trading_timestamp = Utc.timestamp_opt(t as i64, 0).unwrap();
+                let trading_timestamp = Utc.timestamp_millis_opt(t).unwrap();
                 if trading_timestamp.hour() == 0
                     && trading_timestamp.minute() == 0
                     && trading_timestamp.second() == 0
@@ -54,108 +55,6 @@ impl TickEvent {
         };
 
         result
-    }
-}
-
-#[derive(InfluxDbWriteable)]
-struct EmaResult {
-    time: DateTime<Utc>,
-    calc_38: f32,
-    calc_100: f32,
-    first: f32, // Price of window opening
-    last: f32,  // Price of window closing
-    max: f32,   // Max value of window
-    min: f32,   // Min value of window
-    #[influxdb(tag)]
-    id: String,
-    #[influxdb(tag)]
-    equity_type: String,
-}
-
-#[derive(InfluxDbWriteable, Debug)]
-struct Breakout {
-    #[influxdb(tag)]
-    id: String,
-    #[influxdb(tag)]
-    tags: String,
-    time: DateTime<Utc>,
-    title: String,
-}
-
-#[derive(InfluxDbWriteable, Debug)]
-struct Performance {
-    #[influxdb(tag)]
-    id: String,
-    #[influxdb(tag)]
-    window_number: u32,
-    time: DateTime<Utc>,
-    window_creation_start: i64,
-    window_creation_end: i64,
-    // Invariant: window_creation_end = influx_write_start
-    influx_write_end: i64,
-}
-
-impl Performance {
-    fn new<T: Into<String>>(id: T, window_number: u32) -> Performance {
-        Performance {
-            id: id.into(),
-            window_number,
-            time: Utc::now(),
-            window_creation_start: 0,
-            window_creation_end: 0,
-            influx_write_end: 0,
-        }
-    }
-
-    fn set_window_start(&mut self) {
-        self.window_creation_start = Utc::now().timestamp_millis();
-    }
-
-    fn set_window_end(&mut self) {
-        self.window_creation_end = Utc::now().timestamp_millis();
-    }
-}
-
-struct InfluxResults {
-    ema: EmaResult,
-    breakout: Option<Breakout>,
-    perf: Performance,
-}
-
-impl InfluxResults {
-    fn new(ema: EmaResult, breakout: Option<Breakout>, perf: Performance) -> InfluxResults {
-        InfluxResults {
-            ema,
-            breakout,
-            perf,
-        }
-    }
-}
-
-impl Breakout {
-    fn new(
-        id: String,
-        time: i64,
-        btype: BreakoutType,
-        previous: (f32, f32),
-        current: (f32, f32),
-    ) -> Breakout {
-        let time = Utc.timestamp_opt(time, 0).unwrap();
-        let breakout = match btype {
-            BreakoutType::Bullish => Breakout {
-                id: id.clone(),
-                time,
-                title: format!("Bullish event (BUY BUY BUY!) for {} due to: WindowCurrent({} > {}) AND WindowPrevious({} <= {})", id, current.0, current.1, previous.0, previous.1),
-                tags: "bullish".to_string(),
-            },
-            BreakoutType::Bearish => Breakout {
-                id: id.clone(),
-                time,
-                title: format!("Bearish event (SELL SELL SELL!) for {} due to WindowCurrent({} < {}) AND WindowPrevious({} >= {})", id, current.0, current.1, previous.0, previous.1),
-                tags: "bearish".to_string(),
-            },
-        };
-        breakout
     }
 }
 
@@ -181,11 +80,6 @@ impl EMA {
     }
 }
 
-enum BreakoutType {
-    Bullish,
-    Bearish,
-}
-
 struct Window {
     ema: EMA,
     sequence_number: u32,
@@ -207,7 +101,7 @@ impl Window {
             // (ema_38, ema_100)
             current_emas: (0.0, 0.0),
             start_time,
-            end_time: round_up(start_time, 300) - 300,
+            end_time: start_time + 300 * 1000,
             first: price,
             last: 0.0,
             max: price,
@@ -217,15 +111,15 @@ impl Window {
 
     fn tumble(
         &mut self,
-        id: &String,
         new_start_time: i64,
         last_price: f32,
     ) -> Option<(BreakoutType, (f32, f32))> {
         // (ema_38, ema_100)
+        println!("Tumbling, previous window was from {} - {}", DateTime::from_timestamp_millis(self.start_time).unwrap(), DateTime::from_timestamp_millis(self.end_time).unwrap());
         let (new_ema_38, new_ema_100) = self.ema.calc(last_price, self.current_emas);
         let (current_ema_38, current_ema_100) = self.current_emas;
         self.start_time = new_start_time;
-        self.end_time = self.start_time + 300;
+        self.end_time = self.start_time + 300 * 1000;
 
         // Update values for candlestick chart
         self.first = last_price;
@@ -234,17 +128,14 @@ impl Window {
         self.min = last_price;
 
         // A bearish breakout event occurs when:
-        // - Curernt window: EMA_38 < EMA_100
+        // - Current window: EMA_38 < EMA_100
         // - Previous window: EMA_38 >= EMA_100
         // Special case of event when windows start
         self.current_emas = (new_ema_38, new_ema_100);
         if self.sequence_number > 0 {
-            // let ts = Utc.timestamp_opt(new_start_time, 0).unwrap();
             let result = if new_ema_38 < new_ema_100 && current_ema_38 >= current_ema_100 {
-                // println!("[{}] {} Bearish because Current: [{} < {}] and Previous [{} >= {}]", id, ts, new_ema_38, new_ema_100, current_ema_38, current_ema_100);
                 Some((BreakoutType::Bearish, (current_ema_38, current_ema_38)))
             } else if new_ema_38 > new_ema_100 && current_ema_38 <= current_ema_100 {
-                // println!("[{}] {} Bullish because Current: [{} > {}] and Previous [{} <= {}]", id, ts, new_ema_38, new_ema_100, current_ema_38, current_ema_100);
                 Some((BreakoutType::Bullish, (current_ema_38, current_ema_100)))
             } else {
                 None
@@ -258,13 +149,13 @@ impl Window {
     }
 }
 
-struct TickEventManager {
+struct WindowManager {
     windows: HashMap<String, Window>,
 }
 
-impl TickEventManager {
-    fn new() -> TickEventManager {
-        TickEventManager {
+impl WindowManager {
+    fn new() -> WindowManager {
+        WindowManager {
             windows: HashMap::new(),
         }
     }
@@ -272,13 +163,14 @@ impl TickEventManager {
     async fn update(&mut self, tick_event: TickEvent) -> Option<InfluxResults> {
         let trading_timestamp = tick_event
             .trading_timestamp
-            .expect("Got invalid tick event") as i64;
+            .expect("Got invalid tick event");
         let last = tick_event.last.unwrap();
+
 
         let window = self
             .windows
             .entry(tick_event.id.clone())
-            .or_insert_with(|| Window::new(trading_timestamp, last));
+            .or_insert_with(|| Window::new(round_down(trading_timestamp, 300 * 1000), last));
 
         // Does not update when this window is created
         if window.max < last {
@@ -293,8 +185,8 @@ impl TickEventManager {
             return None;
         }
 
-        let mut perf = Performance::new(tick_event.id.clone(), window.sequence_number);
-        perf.set_window_start();
+        // Perf event
+        let start = Utc::now().timestamp_millis();
 
         window.last = last;
         let window_first = window.first;
@@ -303,38 +195,24 @@ impl TickEventManager {
         let window_min = window.min;
 
         let breakout = window.tumble(
-            &tick_event.id,
-            round_up(trading_timestamp as i64, 300) - 300,
+            round_down(trading_timestamp as i64, 300 * 1000),
             last,
         );
-        let ema_result = EmaResult {
-            // Slow clone!?
-            id: tick_event.id.clone(),
-            calc_38: window.current_emas.0,
-            calc_100: window.current_emas.1,
-            time: Utc
-                .timestamp_opt(round_up(trading_timestamp as i64, 300) - 300, 0)
-                .unwrap(),
-            equity_type: tick_event.equity_type,
-            first: window_first,
-            last: window_last,
-            max: window_max,
-            min: window_min,
-        };
-        if let Some(b) = breakout {
-            let breakout = Breakout::new(
-                tick_event.id,
-                round_up(trading_timestamp as i64, 300) - 300,
-                b.0,
-                b.1,
-                window.current_emas,
-            );
-            perf.set_window_end();
-            Some(InfluxResults::new(ema_result, Some(breakout), perf))
-        } else {
-            perf.set_window_end();
-            Some(InfluxResults::new(ema_result, None, perf))
-        }
+        let mut result = InfluxResults::new(
+            tick_event.id,
+            round_down(trading_timestamp, 300 * 1000),
+            tick_event.equity_type,
+            window,
+            window_first,
+            window_last,
+            window_max,
+            window_min,
+            breakout,
+        );
+        result.record_window_start(start);
+        result.record_window_end(Utc::now().timestamp_millis());
+
+        Some(result)
     }
 }
 
@@ -364,23 +242,24 @@ async fn start_core_nats_loop<T: AsRef<str>>(
                         let mut breakout_writes = Vec::with_capacity(buffer.len());
                         let mut perf_writes = Vec::with_capacity(buffer.len());
                         buffer.drain(..).into_iter().for_each(|influx_result| {
-                            window_writes.push(influx_result.ema.into_query("trading_bucket"));
-                            if influx_result.breakout.is_some() {
-                                breakout_writes
-                                    .push(influx_result.breakout.unwrap().into_query("breakout"));
+                            let (window_write, breakout_write, perf) = influx_result.into_query();
+                            window_writes.push(window_write);
+                            if let Some(bw) = breakout_write {
+                                breakout_writes.push(bw);
                             }
-                            perf_writes.push(influx_result.perf);
+                            perf_writes.push(perf);
                         });
                         influx_client.query(window_writes).await.unwrap();
+                        influx_client.query(breakout_writes).await.unwrap();
                         let write_end = Utc::now().timestamp_millis();
                         let perf_writes = perf_writes
                             .into_iter()
                             .map(|mut p| {
+                                // Not good design but not a lot of time left
                                 p.influx_write_end = write_end;
-                                p.into_query("perf")
+                                p.into_influx_query()
                             })
                             .collect::<Vec<WriteQuery>>();
-                        influx_client.query(breakout_writes).await.unwrap();
                         influx_client.query(perf_writes).await.unwrap();
                     }
                 }
@@ -391,23 +270,24 @@ async fn start_core_nats_loop<T: AsRef<str>>(
                 let mut breakout_writes = Vec::with_capacity(buffer.len());
                 let mut perf_writes = Vec::with_capacity(buffer.len());
                 buffer.drain(..).into_iter().for_each(|influx_result| {
-                    window_writes.push(influx_result.ema.into_query("trading_bucket"));
-                    if influx_result.breakout.is_some() {
-                        breakout_writes
-                            .push(influx_result.breakout.unwrap().into_query("breakout"));
+                    let (window_write, breakout_write, perf) = influx_result.into_query();
+                    window_writes.push(window_write);
+                    if let Some(bw) = breakout_write {
+                        breakout_writes.push(bw);
                     }
-                    perf_writes.push(influx_result.perf);
+                    perf_writes.push(perf);
                 });
                 influx_client.query(window_writes).await.unwrap();
+                influx_client.query(breakout_writes).await.unwrap();
                 let write_end = Utc::now().timestamp_millis();
                 let perf_writes = perf_writes
                     .into_iter()
                     .map(|mut p| {
+                        // Not good design but not a lot of time left
                         p.influx_write_end = write_end;
-                        p.into_query("perf")
+                        p.into_influx_query()
                     })
                     .collect::<Vec<WriteQuery>>();
-                influx_client.query(breakout_writes).await.unwrap();
                 influx_client.query(perf_writes).await.unwrap();
             }
             continue;
@@ -420,7 +300,7 @@ async fn start_core_nats_loop<T: AsRef<str>>(
         .map_err(|_| anyhow!("Could not subscribe to 'event"))?;
     println!("Subscribed to {}", exchange.as_ref());
 
-    let mut manager = TickEventManager::new();
+    let mut manager = WindowManager::new();
 
     let mut counter = 0;
 
@@ -429,62 +309,13 @@ async fn start_core_nats_loop<T: AsRef<str>>(
         counter += 1;
         if counter % 100 == 0 {
             print!("Counter: {}\r", counter);
-            std::io::stdout().flush().unwrap();
+            std::io::stdout().flush()?;
         }
         if !tick_event.is_valid() {
             continue;
         }
         if let Some(window) = manager.update(tick_event).await {
-            tx.send(window).await.unwrap();
-        }
-    }
-
-    Ok(())
-}
-
-async fn start_jestream_loop<T: AsRef<str>>(
-    exchange: T,
-    nats_client: async_nats::Client,
-) -> Result<()> {
-    let jetstream = async_nats::jetstream::new(nats_client);
-    println!("Created jetstream context");
-
-    let stream_name = String::from("events");
-
-    // Create a pull-based consumer
-    let consumer: PullConsumer = jetstream
-        .create_stream(jetstream::stream::Config {
-            name: stream_name,
-            subjects: vec![exchange.as_ref().to_string()],
-            ..Default::default()
-        })
-        .await?
-        .create_consumer(jetstream::consumer::pull::Config {
-            // Setting durable_name to Some(...) will cause this consumer to be "durable".
-            // This may be a good choice for workloads that benefit from the JetStream server or cluster remembering the progress of consumers for fault tolerance purposes.
-            // If a consumer crashes, the JetStream server or cluster will remember which messages the consumer acknowledged.
-            // When the consumer recovers, this information will allow the consumer to resume processing where it left off. If you're unsure, set this to Some(...).
-            durable_name: Some("consumer".to_string()),
-            ..Default::default()
-        })
-        .await?;
-    println!("Created jetstream pull consumer");
-
-    let mut messages = consumer.messages().await?;
-
-    let mut manager = TickEventManager::new();
-
-    while let Some(message) = messages.next().await {
-        match message {
-            Ok(m) => {
-                let tick_event = bincode::deserialize::<TickEvent>(&m.payload)?;
-                if !tick_event.is_valid() {
-                    // TODO: Log to error reporting service;
-                    continue;
-                }
-                manager.update(tick_event).await;
-            }
-            Err(_) => unimplemented!(),
+            tx.send(window).await?;
         }
     }
 
@@ -503,8 +334,7 @@ async fn consumer<T: AsRef<str>>(exchange: T, mode: NatsMode) -> Result<()> {
             Ok(())
         }
         NatsMode::Jetstream => {
-            start_jestream_loop(exchange, nats_client).await?;
-            Ok(())
+            unimplemented!();
         }
     }
 }

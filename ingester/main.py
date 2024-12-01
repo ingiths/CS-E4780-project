@@ -33,12 +33,14 @@ def create_nats_message(
         datetime_combined = datetime.datetime.combine(
             date,
             datetime.datetime.strptime(time, "%H:%M:%S.%f").time(),
-            tzinfo=zoneinfo.ZoneInfo("Europe/Paris"),
+            tzinfo=zoneinfo.ZoneInfo("UTC"),
         )
-        unix = int(datetime_combined.strftime("%s"))
-        # TODO: Finda  proper fix to CEST and UTC, not just adding 7200 seconds LOL
+        print(f"GABVA {datetime_combined} and {datetime_combined.timestamp()}")
+
+        # Store millisecond precisison
+        unix_ms = int(datetime_combined.timestamp() * 1000)
         # Avoid padding with <
-        date_payload = struct.pack("<?I", True, unix + 2 * 3600)
+        date_payload = struct.pack("<?Q", True, unix_ms)
     else:
         date_payload = struct.pack("?", False)
 
