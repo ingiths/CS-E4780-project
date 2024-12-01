@@ -297,15 +297,8 @@ async fn start_core_nats_loop<T: AsRef<str>>(
 
     let mut manager = WindowManager::new();
 
-    // let mut counter = 0;
-
     while let Some(message) = subscriber.next().await {
         let tick_event = bincode::deserialize::<TickEvent>(&message.payload)?;
-        // counter += 1;
-        // if counter % 100 == 0 {
-        //     print!("Counter: {}\r", counter);
-        //     std::io::stdout().flush()?;
-        // }
         if !tick_event.is_valid() {
             continue;
         }

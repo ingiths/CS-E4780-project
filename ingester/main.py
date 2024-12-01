@@ -6,6 +6,8 @@ import zoneinfo
 import time
 import gc
 from enum import Enum
+import concurrent.futures
+from concurrent.futures import ProcessPoolExecutor  # Change this import
 
 
 import polars as pl
@@ -16,7 +18,7 @@ import typer
 class Partition(Enum):
     GLOBAL = "global"
     EXCHANGE = "exchange"
-    ID = "id"
+    COUNT = "count"
 
 
 def create_nats_message(
@@ -62,12 +64,39 @@ def create_nats_message(
 
 app = typer.Typer()
 
+async def nats_ingest(
+    df: pl.DataFrame,
+    exchange: str,
+    flush_interval: int | None = 1000,
+    show_progress_bar: bool = False,
+):
+    nc = await nats.connect("nats://localhost:4222")
+    if show_progress_bar:
+        with alive_bar(len(df)) as bar:
+            for i, event in enumerate(df.iter_rows(named=False, buffer_size=1024)):
+                await nc.publish(exchange, create_nats_message(*event))
+                if flush_interval and i % flush_interval == 0:
+                    await nc.flush()
+                bar()
+    else:
+        for i, event in enumerate(df.iter_rows(named=False, buffer_size=1024)):
+            await nc.publish(exchange, create_nats_message(*event))
+            if flush_interval and i % flush_interval == 0:
+                await nc.flush()
+
+    await nc.flush()
+    await nc.close()
+
+def process_partition(df, exchange_id):
+    asyncio.run(nats_ingest(df, exchange_id))
+    return exchange_id
 
 @app.command()
 def ingest(
     files: list[str],
     entity: str | None = None,
     partition: Partition = Partition.GLOBAL,
+    consumer_count: int | None = None
 ):
     total_message_count = 0
 
@@ -88,28 +117,6 @@ def ingest(
         print(f"Read {file} in {round(end - start, 2)} seconds, shape: {df.shape}.")
         return df
 
-    async def nats_ingest(
-        df: pl.DataFrame,
-        exchange: str,
-        flush_interval: int | None = 1000,
-        show_progress_bar: bool = False,
-    ):
-        nc = await nats.connect("nats://localhost:4222")
-        if show_progress_bar:
-            with alive_bar(len(df)) as bar:
-                for i, event in enumerate(df.iter_rows(named=False, buffer_size=1024)):
-                    await nc.publish(exchange, create_nats_message(*event))
-                    if flush_interval and i % flush_interval == 0:
-                        await nc.flush()
-                    bar()
-        else:
-            for i, event in enumerate(df.iter_rows(named=False, buffer_size=1024)):
-                await nc.publish(exchange, create_nats_message(*event))
-                if flush_interval and i % flush_interval == 0:
-                    await nc.flush()
-
-        await nc.flush()
-        await nc.close()
 
     async def global_ingest(file: str, entity: str | None):
         df = preprocess_csv_file(file, entity=entity)
@@ -126,51 +133,67 @@ def ingest(
         del df
         gc.collect()
 
-        tasks = []
         message_count = 0
-        for exchange, df in list(exchanges.items()):
-            print(f"Spawning task for {exchange} - ingesting {len(df)} events to exchange.{exchange}")
-            message_count += len(df)
-            tasks.append(asyncio.create_task(nats_ingest(df, f"exchange.{exchange}")))
-
-        print(f"Sending {message_count} message")
         start = time.time()
-        await asyncio.gather(*tasks)
+        with ProcessPoolExecutor(max_workers=len(exchanges)) as executor:
+            futures = []
+            for id, df in list(exchanges.items()):
+                print(f"Spawning task for {id} - ingesting {len(df)} events")
+                message_count += len(df)
+                future = executor.submit(process_partition, df, f"exchange.{id}")
+                futures.append(future)
+            print(f"Sending {message_count} message")
+            for f in concurrent.futures.as_completed(futures):
+                try:
+                    process_id = f.result()
+                    print(f"Process {process_id} completed successfully")
+                except Exception as e:
+                    print(f"Process failed with error: {e}")
         end = time.time()
         time_taken = round(end - start, 2)
+
         print(
             f"Sent {message_count} messages took {time_taken} seconds, {round(message_count / time_taken, 2)} message/s"
         )
+
         nonlocal total_message_count
         total_message_count += message_count
         print(f"Total messages sent: {total_message_count}")
+    
 
-    async def ingest_by_id(file: str):
+    def ingest_by_id(file: str, consumer_count):
         df = preprocess_csv_file(file)
-        # Split dataframes by ID
-        split_dfs = {}
-        unique_ids = df["ID"].unique().sort().to_list()[:250]
+        # Split dataframes by number of consumers
+        # Helping with typing issues
+        ingesters: dict[int, pl.DataFrame] = dict.fromkeys(range(consumer_count), pl.DataFrame())
 
-        print(f"Pre prcessing {len(unique_ids)} IDs")
-        with alive_bar(total=len(unique_ids)) as bar:
-            for id in unique_ids:
-                split_dfs[id] = df.filter(pl.col("ID") == id)
+        print(f"Pre prcessing into {consumer_count} partitions")
+        with alive_bar(total=consumer_count) as bar:
+            for i in range(consumer_count):
+                ingesters[i] = df.filter(pl.col("ID").hash(42) % consumer_count == i)
                 bar()
         del df
         gc.collect()
 
-        # Create tasks for each ID
-        tasks = []
         message_count = 0
-        for id, df in list(split_dfs.items()):
-            print(f"Spawning task for {id} - ingesting {len(df)} events")
-            message_count += len(df)
-            tasks.append(asyncio.create_task(nats_ingest(df, id)))
 
-        # Wait for all tasks to complete before moving to next file
-        print(f"Sending {message_count} message")
         start = time.time()
-        await asyncio.gather(*tasks)
+        with ProcessPoolExecutor(max_workers=consumer_count) as executor:
+            futures = []
+            for id, df in list(ingesters.items()):
+                print(f"Spawning task for {id} - ingesting {len(df)} events")
+                message_count += len(df)
+                future = executor.submit(process_partition, df, f"exchange.{id}")
+                futures.append(future)
+            print(f"Sending {message_count} message")
+            for f in concurrent.futures.as_completed(futures):
+                try:
+                    process_id = f.result()
+                    print(f"Process {process_id} completed successfully")
+                except Exception as e:
+                    print(f"Process failed with error: {e}")
+
+
         end = time.time()
         time_taken = round(end - start, 2)
         print(
@@ -189,9 +212,11 @@ def ingest(
         elif partition == Partition.EXCHANGE:
             print("Running 3 producers, 3 tasks will be created: [ETR, FR, NL]")
             asyncio.run(ingest_by_exchange(file))
-        elif partition == Partition.ID:
-            print("Running as many producers as there are unique IDs in the data")
-            asyncio.run(ingest_by_id(file))
+        elif partition == Partition.COUNT:
+            if not consumer_count:
+                raise ValueError("consumer_count must not be None")
+            print(f"Running as {consumer_count} ingesters")
+            ingest_by_id(file, consumer_count)
         else:
             raise ValueError("Invalid ingestion_mode")
         end = time.time()
