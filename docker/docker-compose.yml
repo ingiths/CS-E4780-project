@@ -14,8 +14,24 @@ services:
       - DOCKER_INFLUXDB_INIT_BUCKET=trading_bucket
       - DOCKER_INFLUXDB_INIT_RETENTION=0
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=token
-    # volumes:
-    #   - influxdb-data:/var/lib/influxdb2
+      # Memory optimization settings
+      # Inform the kernel that InfluxDB intends to page in mmap’d sections of TSM files.
+      - INFLUXD_STORAGE_TSM_USE_CACHE=true
+      # Maximum size (in bytes) a shard’s cache can reach before it starts rejecting writes.
+      - INFLUXD_STORAGE_CACHE_MAX_MEMORY_SIZE=4g
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: '4'
+        reservations:
+          memory: 2G
+          cpus: '2'
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    restart: unless-stopped
 
   grafana:
     image: grafana/grafana
@@ -33,13 +49,6 @@ services:
     networks:
       - trading-network
   
-
-# volumes:
-#   nats-data:
-#     driver: local
-#   influxdb-data:
-#     driver: local
-
 networks:
   trading-network:
     driver: bridge

@@ -8,21 +8,14 @@ services:
     environment:
       - NATS_SERVER_NAME=nats-server
       - NATS_CLUSTER_NAME=trading-cluster
-    command:
-      - "--max_payload=8MB"            # Increase max message size
-      - "--max_connections=100000"     # Increase max connections
-      - "--max_control_line=4KB"       # Control line buffer
-      - "--max_pending=256MB"          # Pending messages buffer
-      - "--write_deadline=2s"          # Write deadline
-      - "--max_subscriptions=100000"   # Max subscriptions per connection
     deploy:
       resources:
         limits:
-          cpus: '4'
-          memory: 8G
+          cpus: '2'
+          memory: 2G
         reservations:
           cpus: '2'
-          memory: 4G
+          memory: 1G
     ulimits:
       nofile:
         soft: 65536

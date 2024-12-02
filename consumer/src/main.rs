@@ -234,7 +234,7 @@ async fn start_core_nats_loop<T: AsRef<str>>(
 
     tokio::spawn(async move {
         // TODO: Handle when buffer lenght is not 500
-        let mut buffer = Vec::with_capacity(1000);
+        let mut buffer = Vec::with_capacity(500);
         let my_duration = tokio::time::Duration::from_millis(500);
         loop {
             while let Ok(i) = timeout(my_duration, rx.recv()).await {
@@ -253,7 +253,9 @@ async fn start_core_nats_loop<T: AsRef<str>>(
                             perf_writes.push(perf);
                         });
                         influx_client.query(window_writes).await.unwrap();
-                        influx_client.query(breakout_writes).await.unwrap();
+                        if breakout_writes.len() > 0 {
+                            influx_client.query(breakout_writes).await.unwrap();
+                        }
                         let write_end = Utc::now().timestamp_millis();
                         let perf_writes = perf_writes
                             .into_iter()

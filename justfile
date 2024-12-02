@@ -1,10 +1,7 @@
 start-core:
     docker compose -f docker/docker-compose.yml rm --stop --volumes --force
-    docker compose  -f docker/docker-compose.yml -f docker/compose.jetstream.yml up
+    docker compose  -f docker/docker-compose.yml -f docker/compose.nats_core.yml up
 
-start-jetsream:
-    docker compose -f docker/docker-compose.yml rm --stop --volumes --force
-    docker compose -f docker/docker-compose.yml -f docker/compose.nats_core.yml up
 
 consume partition count="1":
     #!/usr/bin/env sh
