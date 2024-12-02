@@ -11,6 +11,17 @@ consume partition count="1":
         cd consumer && cargo run --release -- {{partition}}
     fi
 
+analyze file entity:
+    #!/usr/bin/env sh
+    cd ingester
+    if command -v uv >/dev/null 2>&1; then
+        RUNNER="uv run"
+    else
+        RUNNER="python3"
+    fi
+
+    $RUNNER analyze.py ../{{file}} {{entity}}
+
 ingest-global entity="":
     #!/usr/bin/env sh
     cd ingester
