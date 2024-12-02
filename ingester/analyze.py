@@ -21,10 +21,10 @@ def analyze(file: str, entity: str) -> pl.DataFrame:
     ])
 
     result = df.group_by(["ID", "window_start"]).agg([
-        pl.col("Last").last().alias("last_price"),
-        pl.col("Last").min().alias("min_price"),
-        pl.col("Last").max().alias("max_price"),
         pl.col("Last").first().alias("first_price"),
+        pl.col("Last").last().alias("last_price"),
+        pl.col("Last").max().alias("max_price"),
+        pl.col("Last").min().alias("min_price"),
         pl.col("Last").len().alias("movements"),
         pl.col("Trading time").last().cast(pl.Time).alias("last_update")
     ]).sort(["ID", "window_start"])

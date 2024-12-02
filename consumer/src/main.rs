@@ -186,13 +186,13 @@ impl WindowManager {
         }
 
         if window.end_time >= trading_timestamp {
+            window.last = last;
             return None;
         }
 
         // Perf event
         let start = Utc::now().timestamp_millis();
 
-        window.last = last;
         let window_first = window.first;
         let window_last = window.last;
         let window_max = window.max;
@@ -214,6 +214,7 @@ impl WindowManager {
         );
         result.record_window_start(start);
         result.record_window_end(Utc::now().timestamp_millis());
+        window.last = last;
 
         Some(result)
     }
