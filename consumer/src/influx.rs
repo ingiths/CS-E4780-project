@@ -17,6 +17,7 @@ struct EmaResult {
     last: f32,  // Price of window closing
     max: f32,   // Max value of window
     min: f32,   // Min value of window
+    movements: u32,
     #[influxdb(tag)]
     id: String,
     #[influxdb(tag)]
@@ -122,6 +123,7 @@ impl InfluxResults {
             last: window_last,
             max: window_max,
             min: window_min,
+            movements
         };
 
         let breakout = match breakout {

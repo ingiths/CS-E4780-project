@@ -64,6 +64,7 @@ def create_nats_message(
 
 app = typer.Typer()
 
+
 async def nats_ingest(
     df: pl.DataFrame,
     exchange: str,
@@ -87,16 +88,18 @@ async def nats_ingest(
     await nc.flush()
     await nc.close()
 
+
 def process_partition(df, exchange_id):
     asyncio.run(nats_ingest(df, exchange_id))
     return exchange_id
+
 
 @app.command()
 def ingest(
     files: list[str],
     entity: str | None = None,
     partition: Partition = Partition.GLOBAL,
-    consumer_count: int | None = None
+    consumer_count: int | None = None,
 ):
     total_message_count = 0
 
@@ -117,7 +120,6 @@ def ingest(
         print(f"Read {file} in {round(end - start, 2)} seconds, shape: {df.shape}.")
         return df
 
-
     async def global_ingest(file: str, entity: str | None):
         df = preprocess_csv_file(file, entity=entity)
         print("Starting ingestion into NATS server")
@@ -127,9 +129,9 @@ def ingest(
         df = preprocess_csv_file(file)
         exchanges = {}
         print("Splitting dataframe by exchange...")
-        exchanges['ETR'] = df.filter(pl.col("ID").str.ends_with("ETR"))
-        exchanges['FR'] = df.filter(pl.col("ID").str.ends_with("FR"))
-        exchanges['NL'] = df.filter(pl.col("ID").str.ends_with("NL"))
+        exchanges["ETR"] = df.filter(pl.col("ID").str.ends_with("ETR"))
+        exchanges["FR"] = df.filter(pl.col("ID").str.ends_with("FR"))
+        exchanges["NL"] = df.filter(pl.col("ID").str.ends_with("NL"))
         del df
         gc.collect()
 
@@ -159,13 +161,14 @@ def ingest(
         nonlocal total_message_count
         total_message_count += message_count
         print(f"Total messages sent: {total_message_count}")
-    
 
     def ingest_by_id(file: str, consumer_count):
         df = preprocess_csv_file(file)
         # Split dataframes by number of consumers
         # Helping with typing issues
-        ingesters: dict[int, pl.DataFrame] = dict.fromkeys(range(consumer_count), pl.DataFrame())
+        ingesters: dict[int, pl.DataFrame] = dict.fromkeys(
+            range(consumer_count), pl.DataFrame()
+        )
 
         print(f"Pre prcessing into {consumer_count} partitions")
         with alive_bar(total=consumer_count) as bar:
@@ -192,7 +195,6 @@ def ingest(
                     print(f"Process {process_id} completed successfully")
                 except Exception as e:
                     print(f"Process failed with error: {e}")
-
 
         end = time.time()
         time_taken = round(end - start, 2)

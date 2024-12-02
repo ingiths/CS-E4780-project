@@ -174,19 +174,16 @@ impl WindowManager {
             .entry(tick_event.id.clone())
             .or_insert_with(|| Window::new(round_down(trading_timestamp, 300 * 1000), last));
         
-        window.movements += 1;
-
-        // Does not update when this window is created
-        if window.max < last {
-            window.max = last;
-        }
-
-        if last < window.min {
-            window.min = last;
-        }
-
         if window.end_time >= trading_timestamp {
+            if window.max < last {
+                window.max = last;
+            }
+
+            if last < window.min {
+                window.min = last;
+            }
             window.last = last;
+            window.movements += 1;
             return None;
         }
 
@@ -198,11 +195,12 @@ impl WindowManager {
         let window_max = window.max;
         let window_min = window.min;
         let movements = window.movements;
+        let window_start_time = window.start_time;
 
         let breakout = window.tumble(round_down(trading_timestamp as i64, 300 * 1000), last);
         let mut result = InfluxResults::new(
             tick_event.id,
-            round_down(trading_timestamp, 300 * 1000),
+            window_start_time,
             tick_event.equity_type,
             window,
             window_first,
