@@ -6,8 +6,13 @@ start-jetsream:
     docker compose -f docker/docker-compose.yml rm --stop --volumes --force
     docker compose -f docker/docker-compose.yml -f docker/compose.nats_core.yml up
 
-consume mode partition:
-    cd consumer && cargo run --release -- {{mode}} {{partition}}
+consume partition count="1":
+    #!/usr/bin/env sh
+    if [ {{partition}} = "multi" ]; then
+        cd consumer && cargo run --release -- {{partition}} -n {{count}}
+    else
+        cd consumer && cargo run --release -- {{partition}}
+    fi
 
 ingest-global entity="":
     #!/usr/bin/env sh
@@ -70,7 +75,7 @@ ingest-by-consumer-count count="1":
         RUNNER="python3"
     fi
     echo "Using runner '${RUNNER}'"
-    echo "Ingesting all files, sequential mode"
+    echo "Ingesting all files, creating {{count}} ingesters"
     $RUNNER main.py ingest \
         ../data/debs2022-gc-trading-day-08-11-21.csv \
         ../data/debs2022-gc-trading-day-09-11-21.csv \

@@ -1,24 +1,22 @@
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand};
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-pub enum NatsMode {
-    Core,
-    Jetstream,
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-pub enum Partition {
-    Global,
+#[derive(Clone, Debug, Subcommand)]
+pub enum PartitionSubcommand {
+    #[clap(about="Spawn a single global consumer")]
+    Single,
+    #[clap(about="Spawn a three 3 consumer, each listening to some exchange in [ETR, FR, NL]")]
     ByExchange,
-    Hash,
+    #[clap(about="Spawn N consumers, N > 0 and N < number of IDs")]
+    Multi {
+        #[arg(short)]
+        n: usize
+    }
 }
 
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 pub struct Cli {
-    #[arg(value_enum)]
-    pub nats_mode: NatsMode,
-    #[arg(value_enum)]
-    pub partition: Partition,
+    #[command(subcommand)]
+    pub partition_subcommand: PartitionSubcommand,
 }

@@ -10,9 +10,9 @@ use clap::Parser;
 use futures::StreamExt;
 use influxdb::{Client, WriteQuery};
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, task::JoinSet};
 
-use cli::{Cli, NatsMode, Partition};
+use cli::{Cli, PartitionSubcommand};
 
 use tokio::time::timeout;
 
@@ -318,43 +318,44 @@ async fn start_core_nats_loop<T: AsRef<str>>(
     Ok(())
 }
 
-async fn consumer<T: AsRef<str>>(exchange: T, mode: NatsMode) -> Result<()> {
+async fn consumer<T: AsRef<str>>(exchange: T) -> Result<()> {
     let nats_client = async_nats::connect("localhost:4222").await.map_err(|_| {
         anyhow!("Could not connect to NATS server at localhost:4222, is the server running?")
     })?;
     println!("Connected to NATS server");
-
-    match mode {
-        NatsMode::Core => {
-            start_core_nats_loop(exchange, nats_client).await?;
-            Ok(())
-        }
-        NatsMode::Jetstream => {
-            unimplemented!();
-        }
-    }
+    start_core_nats_loop(exchange, nats_client).await?;
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    println!(
-        "=== Config begin ===\npartition={:#?}\nnats_mode={:#?}\n=== Config end   ===\n",
-        cli.partition, cli.nats_mode
-    );
-
-    match cli.partition {
-        Partition::Global => consumer("exchange", cli.nats_mode).await?,
-        Partition::ByExchange => {
+    match cli.partition_subcommand {
+        PartitionSubcommand::Single =>  { 
+            println!("Spawning single global consumer subscribed to the 'exchange' subject");
+            consumer("exchange").await? 
+        },
+        PartitionSubcommand::ByExchange => {
             // Returns three results, when the futures never return
+            println!("Spawning three exchange consumer subscribed to the 'exchange.FR', 'exchange.NL', 'exchange.ETR' subjects");
             let (_, _, _) = tokio::join!(
-                tokio::spawn(async move { consumer("exchange.FR", cli.nats_mode).await }),
-                tokio::spawn(async move { consumer("exchange.NL", cli.nats_mode).await }),
-                tokio::spawn(async move { consumer("exchange.ETR", cli.nats_mode).await }),
+                tokio::spawn(async move { consumer("exchange.FR").await }),
+                tokio::spawn(async move { consumer("exchange.NL").await }),
+                tokio::spawn(async move { consumer("exchange.ETR").await }),
             );
         }
-        Partition::Hash => {}
+        PartitionSubcommand::Multi { n } => { 
+            let mut set = JoinSet::new();
+            for i in 0..n {
+                println!("Spawning consumer subscribed to the 'exchange.{}' subject", i);
+                set.spawn(async move {
+                    consumer(format!("exchange.{}", i)).await
+                });
+            }
+            // Wait forever...
+            while let Some(_) = set.join_next().await { }
+        }
     }
 
     Ok(())
