@@ -173,6 +173,12 @@ impl WindowManager {
             .windows
             .entry(tick_event.id.clone())
             .or_insert_with(|| Window::new(round_down(trading_timestamp, 300 * 1000), last));
+
+        // Are we receiving events from the past?
+        if trading_timestamp < window.start_time {
+            println!("Received data from the past, will drop");
+            return None;
+        }
         
         if window.end_time >= trading_timestamp {
             if window.max < last {
