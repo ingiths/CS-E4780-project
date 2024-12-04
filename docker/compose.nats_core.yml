@@ -25,6 +25,17 @@ services:
     depends_on:
       - influxdb
 
+  jetstream:
+    image: nats:2.10.22
+    ports:
+      - "127.0.0.1:4223:4222"  # Client connections
+      - "127.0.0.1:8223:8222"  # HTTP management
+    environment:
+      - NATS_SERVER_NAME=jetstream-server
+      - NATS_CLUSTER_NAME=breakout-cluster
+    command:
+      - --jetstream
+
 volumes:
   nats-data:
   nats-config:

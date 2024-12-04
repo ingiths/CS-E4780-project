@@ -96,9 +96,7 @@ def load_actual_solution(file: str, entity: str) -> pl.DataFrame:
     )
     df = df.drop_nulls()
     # Sometimes, the data is messed up
-    df = df.with_columns([
-        pl.col("Last").cast(pl.Float32)
-    ])
+    df = df.with_columns([pl.col("Last").cast(pl.Float32)])
     df = df.with_columns(
         [
             pl.col("Trading time")
@@ -111,7 +109,6 @@ def load_actual_solution(file: str, entity: str) -> pl.DataFrame:
     df = df.with_columns(
         [pl.col("Trading time").dt.truncate("5m").cast(pl.Time).alias("window_start")]
     ).filter(pl.col("Trading time").dt.time() >= pl.time(9, 0, 0))
-
 
     result = (
         df.group_by(["ID", "window_start"])
@@ -172,19 +169,24 @@ def print_event_count(limit: int = 10):
     reversed(paths)
     with alive_bar(len(paths)) as bar:
         for path in sorted(pathlib.Path("../data").glob("*.csv")):
-            counts = (pl.scan_csv(path, separator=",", comment_prefix="#")
-                        .select("ID")
-                        .group_by("ID")
-                        .len("Event Count").collect())
+            counts = (
+                pl.scan_csv(path, separator=",", comment_prefix="#")
+                .select("ID")
+                .group_by("ID")
+                .len("Event Count")
+                .collect()
+            )
             if previous is None:
                 previous = counts
             else:
-                previous = previous.join(counts, on="ID").select(pl.col("ID"), pl.col("Event Count") + pl.col("Event Count_right"))
+                previous = previous.join(counts, on="ID").select(
+                    pl.col("ID"), pl.col("Event Count") + pl.col("Event Count_right")
+                )
             bar()
     if previous is not None:
         print(previous.sort(by="Event Count", descending=True).head(limit))
         print(f"Total events = {previous.sum()}")
-    
+
 
 @app.command()
 def print_event_count_window(window: str = "5m", limit: int = 5):
@@ -193,7 +195,12 @@ def print_event_count_window(window: str = "5m", limit: int = 5):
     reversed(paths)
     with alive_bar(len(paths)) as bar:
         for path in paths:
-            df = pl.scan_csv(path, separator=",", comment_prefix="#").select("ID", "Trading time").collect().drop_nulls()
+            df = (
+                pl.scan_csv(path, separator=",", comment_prefix="#")
+                .select("ID", "Trading time")
+                .collect()
+                .drop_nulls()
+            )
             df = df.with_columns(
                 [
                     pl.col("Trading time")
@@ -203,18 +210,26 @@ def print_event_count_window(window: str = "5m", limit: int = 5):
             )[1:]
 
             df = df.with_columns(
-                [pl.col("Trading time").dt.truncate(window).cast(pl.Time).alias("window_start").cast(pl.Time)]
+                [
+                    pl.col("Trading time")
+                    .dt.truncate(window)
+                    .cast(pl.Time)
+                    .alias("window_start")
+                    .cast(pl.Time)
+                ]
             )
             df = df.group_by("window_start").len("Events in window")
             if previous is None:
-                    previous = df
+                previous = df
             else:
-                previous = previous.join(df, on="window_start").select(pl.col("window_start"), pl.col("Events in window") + pl.col("Events in window_right"))
+                previous = previous.join(df, on="window_start").select(
+                    pl.col("window_start"),
+                    pl.col("Events in window") + pl.col("Events in window_right"),
+                )
             bar()
 
     if previous is not None:
         print(previous.sort("Events in window", descending=True).head(limit))
-
 
 
 if __name__ == "__main__":

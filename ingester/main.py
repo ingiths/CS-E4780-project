@@ -218,7 +218,9 @@ def ingest(
             if not consumer_count:
                 raise ValueError("consumer_count must not be None")
             if consumer_count > 5504:
-                raise ValueError("consumer_count cannot exceed the number of exchanges (5504)")
+                raise ValueError(
+                    "consumer_count cannot exceed the number of exchanges (5504)"
+                )
             print(f"Running as {consumer_count} ingesters")
             ingest_by_id(file, consumer_count)
         else:

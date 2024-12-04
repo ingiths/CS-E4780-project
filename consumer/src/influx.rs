@@ -1,14 +1,31 @@
 use chrono::{DateTime, TimeZone, Utc};
 use influxdb::{InfluxDbWriteable, WriteQuery};
+use tokio::sync::mpsc::Receiver;
+use tokio::time::timeout;
 
-use crate::Window;
+use crate::window::Window;
+
+#[derive(Clone)]
+pub struct InfluxConfig {
+    pub batch_size: usize,
+    pub flush_period: u64,
+}
+
+impl InfluxConfig {
+    pub fn new(batch_size: usize, flush_period: u64) -> InfluxConfig {
+        InfluxConfig {
+            batch_size,
+            flush_period,
+        }
+    }
+}
 
 pub enum BreakoutType {
     Bullish,
     Bearish,
 }
 
-#[derive(InfluxDbWriteable)]
+#[derive(InfluxDbWriteable, Clone)]
 struct EmaResult {
     time: DateTime<Utc>,
     calc_38: f32,
@@ -24,13 +41,13 @@ struct EmaResult {
     equity_type: String,
 }
 
-#[derive(InfluxDbWriteable, Debug)]
-struct Breakout {
+#[derive(InfluxDbWriteable, Clone, Debug)]
+pub struct Breakout {
     #[influxdb(tag)]
-    id: String,
+    pub id: String,
     #[influxdb(tag)]
-    tags: String,
-    time: DateTime<Utc>,
+    pub tags: String,
+    pub time: DateTime<Utc>,
     title: String,
 }
 
@@ -61,7 +78,7 @@ impl Breakout {
     }
 }
 
-#[derive(InfluxDbWriteable, Debug)]
+#[derive(InfluxDbWriteable, Clone, Debug)]
 pub struct Performance {
     #[influxdb(tag)]
     id: String,
@@ -72,7 +89,7 @@ pub struct Performance {
     window_creation_end: i64,
     // Invariant: window_creation_end = influx_write_start
     pub influx_write_end: i64,
-    movements: u32
+    movements: u32,
 }
 
 impl Performance {
@@ -84,7 +101,7 @@ impl Performance {
             window_creation_start: 0,
             window_creation_end: 0,
             influx_write_end: 0,
-            movements
+            movements,
         }
     }
 
@@ -93,9 +110,10 @@ impl Performance {
     }
 }
 
+#[derive(Clone)]
 pub struct InfluxResults {
     ema: EmaResult,
-    breakout: Option<Breakout>,
+    pub breakout: Option<Breakout>,
     perf: Performance,
 }
 
@@ -123,7 +141,7 @@ impl InfluxResults {
             last: window_last,
             max: window_max,
             min: window_min,
-            movements
+            movements,
         };
 
         let breakout = match breakout {
@@ -153,5 +171,74 @@ impl InfluxResults {
             None => None,
         };
         (ema_query, breakout_query, self.perf)
+    }
+}
+
+pub async fn start_influx_background_writer(
+    influx_client: influxdb::Client,
+    mut receiver: Receiver<InfluxResults>,
+    config: InfluxConfig,
+) {
+    let mut buffer = Vec::with_capacity(config.batch_size);
+    let my_duration = tokio::time::Duration::from_millis(config.flush_period);
+    loop {
+        while let Ok(i) = timeout(my_duration, receiver.recv()).await {
+            if let Some(influx_result) = i {
+                buffer.push(influx_result);
+                if buffer.len() == config.batch_size {
+                    let mut window_writes = Vec::with_capacity(buffer.len());
+                    let mut breakout_writes = Vec::with_capacity(buffer.len());
+                    let mut perf_writes = Vec::with_capacity(buffer.len());
+                    buffer.drain(..).into_iter().for_each(|influx_result| {
+                        let (window_write, breakout_write, perf) = influx_result.into_query();
+                        window_writes.push(window_write);
+                        if let Some(bw) = breakout_write {
+                            breakout_writes.push(bw);
+                        }
+                        perf_writes.push(perf);
+                    });
+                    influx_client.query(window_writes).await.unwrap();
+                    if breakout_writes.len() > 0 {
+                        influx_client.query(breakout_writes).await.unwrap();
+                    }
+                    let write_end = Utc::now().timestamp_millis();
+                    let perf_writes = perf_writes
+                        .into_iter()
+                        .map(|mut p| {
+                            // Not good design but not a lot of time left
+                            p.influx_write_end = write_end;
+                            p.into_influx_query()
+                        })
+                        .collect::<Vec<WriteQuery>>();
+                    influx_client.query(perf_writes).await.unwrap();
+                }
+            }
+        }
+        // Flush buffer if not empty
+        if !buffer.is_empty() {
+            let mut window_writes = Vec::with_capacity(buffer.len());
+            let mut breakout_writes = Vec::with_capacity(buffer.len());
+            let mut perf_writes = Vec::with_capacity(buffer.len());
+            buffer.drain(..).into_iter().for_each(|influx_result| {
+                let (window_write, breakout_write, perf) = influx_result.into_query();
+                window_writes.push(window_write);
+                if let Some(bw) = breakout_write {
+                    breakout_writes.push(bw);
+                }
+                perf_writes.push(perf);
+            });
+            influx_client.query(window_writes).await.unwrap();
+            influx_client.query(breakout_writes).await.unwrap();
+            let write_end = Utc::now().timestamp_millis();
+            let perf_writes = perf_writes
+                .into_iter()
+                .map(|mut p| {
+                    // Not good design but not a lot of time left
+                    p.influx_write_end = write_end;
+                    p.into_influx_query()
+                })
+                .collect::<Vec<WriteQuery>>();
+            influx_client.query(perf_writes).await.unwrap();
+        }
     }
 }

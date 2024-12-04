@@ -1,14 +1,14 @@
 start-core:
-    docker compose -f docker/docker-compose.yml rm --stop --volumes --force
+    docker compose -f docker/docker-compose.yml -f docker/compose.nats_core.yml rm --stop --volumes --force
     docker compose  -f docker/docker-compose.yml -f docker/compose.nats_core.yml up
 
 
-consume partition count="1":
+consume partition batch-size="500" flush-period="500" count="1" :
     #!/usr/bin/env sh
     if [ {{partition}} = "multi" ]; then
         cd consumer && cargo run --release -- {{partition}} -n {{count}}
     else
-        cd consumer && cargo run --release -- {{partition}}
+        cd consumer && cargo run --release -- -b {{batch-size}} -f {{flush-period}} {{partition}}
     fi
 
 numerical entity date:
