@@ -20,18 +20,11 @@ async fn listen<T: AsRef<str>>(
     let (breakout_tx, breakout_rx) = mpsc::channel::<BreakoutMessage>(1000);
     let (influx_tx, influx_rx) = mpsc::channel::<InfluxResults>(1000);
 
-    let influx_client = Client::new("http://localhost:8086", "trading_bucket").with_token("token");
-    println!(
-        "Connected to InfluxDB server: name={} url={}",
-        influx_client.database_name(),
-        influx_client.database_url()
-    );
 
     println!("Starting breakout Jestream producer");
     tokio::spawn(async move {
         breakout::start_breakout_producer(breakout_rx).await;
     });
-
     let influx_client = Client::new("http://localhost:8086", "trading_bucket").with_token("token");
     println!(
         "Connected to InfluxDB server: name={} url={}",
@@ -80,6 +73,13 @@ async fn consumer<T: AsRef<str>>(exchange: T, config: InfluxConfig) -> Result<()
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    println!(r"
+    _   _    _  _____ ____  
+    | \ | |  / \|_   _/ ___| 
+    |  \| | / _ \ | | \___ \ 
+    | |\  |/ ___ \| |  ___) |
+    |_| \_/_/   \_\_| |____/ 
+");
 
     let influx_config = InfluxConfig::new(cli.batch_size, cli.flush_period);
     println!("Influx batch size = {}", influx_config.batch_size);

@@ -10,27 +10,47 @@ from alive_progress import alive_bar
 import typer
 
 from utils import preprocess_csv_file
-from ingester.ingester import producer
+import producer
+
 
 class IngestionMode(Enum):
     NATS_CORE = "nats_core"
     JETSTREAM = "jetstream"
+
 
 class Partition(Enum):
     SINGLE = "single"
     EXCHANGE = "exchange"
     MULTI = "multi"
 
-app = typer.Typer()
+
+app = typer.Typer(pretty_exceptions_enable=False)
 
 
+def async_wrapped(
+    mode: IngestionMode,
+    df: pl.DataFrame,
+    exchange: str,
+    flush_interval: int = 1000,
+    show_progress_bar: bool = False,
+):
+    if mode == IngestionMode.NATS_CORE:
+        asyncio.run(
+            producer.nats_core_ingest(df, exchange, flush_interval, show_progress_bar)
+        )
+    elif mode == IngestionMode.JETSTREAM:
+        asyncio.run(
+            producer.jetstream_ingest(df, exchange, flush_interval, show_progress_bar)
+        )
+    else:
+        raise ValueError("Invalid ingestion mode specified")
 
 
 @app.command()
 def ingest(
-    files: list[str],
     mode: IngestionMode,
     partition: Partition,
+    files: list[str],
     entity: str | None = None,
     consumer_count: int = 1,
 ):
@@ -40,10 +60,6 @@ def ingest(
         ingestion_method = producer.nats_core_ingest
     else:
         ingestion_method = producer.jetstream_ingest
-
-    def process_partition(df, exchange_id):
-        asyncio.run(ingestion_method(df, exchange_id))
-        return exchange_id
 
     def single_consumer(file: str, entity: str | None, consumer_count: int | None = 1):
         if consumer_count and consumer_count > 1:
@@ -55,7 +71,9 @@ def ingest(
             print(f"Pre processing into {consumer_count} partitions")
             with alive_bar(total=consumer_count) as bar:
                 for i in range(consumer_count):
-                    ingesters[i] = df.filter(pl.col("ID").hash(42) % consumer_count == i)
+                    ingesters[i] = df.filter(
+                        pl.col("ID").hash(42) % consumer_count == i
+                    )
                     bar()
             del df
             gc.collect()
@@ -68,7 +86,7 @@ def ingest(
                 for id, df in list(ingesters.items()):
                     print(f"Spawning task for {id} - ingesting {len(df)} events")
                     message_count += len(df)
-                    future = executor.submit(process_partition, df, "exchange")
+                    future = executor.submit(ingestion_method, df, "exchange")
                     futures.append(future)
                 print(f"Sending {message_count} message")
                 with alive_bar(len(futures)) as bar:
@@ -106,7 +124,7 @@ def ingest(
             for id, df in list(exchanges.items()):
                 print(f"Spawning task for {id} - ingesting {len(df)} events")
                 message_count += len(df)
-                future = executor.submit(process_partition, df, f"exchange.{id}")
+                future = executor.submit(async_wrapped, mode, df, f"exchange.{id}")
                 futures.append(future)
             print(f"Sending {message_count} message")
             with alive_bar(len(futures)) as bar:
@@ -148,7 +166,7 @@ def ingest(
             for id, df in list(ingesters.items()):
                 print(f"Spawning task for {id} - ingesting {len(df)} events")
                 message_count += len(df)
-                future = executor.submit(process_partition, df, f"exchange.{id}")
+                future = executor.submit(async_wrapped, mode, df, f"exchange.{id}")
                 futures.append(future)
             print(f"Sending {message_count} message")
             with alive_bar(len(futures)) as bar:
@@ -166,14 +184,14 @@ def ingest(
         print(f"Total messages sent: {total_message_count}")
 
     if consumer_count > 5504:
-        raise ValueError(
-            "consumer_count cannot exceed the number of exchanges (5504)"
-        )
+        raise ValueError("consumer_count cannot exceed the number of exchanges (5504)")
     # Run the async function
     for file in files:
         start = time.time()
         if partition == Partition.SINGLE:
-            print(f"Running against single consumer, {consumer_count} tasks will be spawned")
+            print(
+                f"Running against single consumer, {consumer_count} tasks will be spawned"
+            )
             single_consumer(file, entity=entity, consumer_count=consumer_count)
         elif partition == Partition.EXCHANGE:
             print("Running 3 producers, 3 tasks will be created: [ETR, FR, NL]")

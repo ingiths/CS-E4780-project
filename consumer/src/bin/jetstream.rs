@@ -119,6 +119,13 @@ async fn setup_stream(stream_name: impl Into<String>, subjects: Vec<impl Into<St
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    println!(r"
+    _      _       _                            
+    | | ___| |_ ___| |_ _ __ ___  __ _ _ __ ___  
+ _  | |/ _ \ __/ __| __| '__/ _ \/ _` | '_ ` _ \ 
+| |_| |  __/ |_\__ \ |_| | |  __/ (_| | | | | | |
+ \___/ \___|\__|___/\__|_|  \___|\__,_|_| |_| |_|
+");
 
     let influx_config = InfluxConfig::new(cli.batch_size, cli.flush_period);
 

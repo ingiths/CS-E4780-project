@@ -64,7 +64,6 @@ def preprocess_csv_file(file: str, entity: str | None = None) -> pl.DataFrame:
     )
     if entity:
         q = q.filter(pl.col("ID") == entity)
-    
 
     df = q.collect()
     df = df.with_columns(pl.lit(dt).alias("Trading date"))

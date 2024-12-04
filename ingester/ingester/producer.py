@@ -52,27 +52,23 @@ async def nats_core_ingest(
 ):
     nc = await nats.connect(NATS_SERVER)
 
-    messages = []
+    counter = 0
     if show_progress_bar:
         with alive_bar(len(df)) as bar:
             for event in df.iter_rows(named=False, buffer_size=1024):
-                messages.append(nc.publish(exchange, create_nats_message(*event)))
-                if len(messages) > flush_interval:
-                    await asyncio.gather(*messages)
-                    messages.clear()
+                await nc.publish(exchange, create_nats_message(*event))
+                counter += 1
+                if counter > flush_interval:
+                    counter = 0
                     await nc.flush()
                 bar()
     else:
         for event in df.iter_rows(named=False, buffer_size=1024):
-            messages.append(nc.publish(exchange, create_nats_message(*event)))
-            if len(messages) > flush_interval:
-                await asyncio.gather(*messages)
-                messages.clear()
+            await nc.publish(exchange, create_nats_message(*event))
+            counter += 1
+            if counter > flush_interval:
+                counter = 0
                 await nc.flush()
 
-    try:
-        await asyncio.gather(*messages)
-    finally:
-        messages.clear()
     await nc.flush()
     await nc.close()
