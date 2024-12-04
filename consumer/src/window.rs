@@ -5,18 +5,17 @@ use chrono::Utc;
 
 use crate::tick::TickEvent;
 
-const EMA_38: f32 = 38.0;
-const EMA_100: f32 = 100.0;
+const EMA_38: f64 = 38.0;
+const EMA_100: f64 = 100.0;
 
 fn round_down(number: i64, multiplier: i64) -> i64 {
     ((number + multiplier / 2) / multiplier) * multiplier
 }
 
-
 #[derive(Clone)]
 struct EMA {
-    ema_38: f32,
-    ema_100: f32,
+    ema_38: f64,
+    ema_100: f64,
 }
 
 impl EMA {
@@ -27,7 +26,7 @@ impl EMA {
         }
     }
 
-    fn calc(&mut self, last_price: f32, previous: (f32, f32)) -> (f32, f32) {
+    fn calc(&mut self, last_price: f64, previous: (f64, f64)) -> (f64, f64) {
         self.ema_38 =
             last_price * (2.0 / (1.0 + EMA_38)) + previous.0 * (1.0 - 2.0 / (1.0 + EMA_38));
         self.ema_100 =
@@ -40,19 +39,19 @@ impl EMA {
 pub struct Window {
     ema: EMA,
     pub sequence_number: u32,
-    pub current_emas: (f32, f32), // (ema_38, ema_100)
+    pub current_emas: (f64, f64), // (ema_38, ema_100)
     pub start_time: i64,
     pub end_time: i64,
     // Information about prices
-    pub first: f32, // Price of window opening
-    pub last: f32,  // Price of window closing
-    pub max: f32,   // Max value of window
-    pub min: f32,   // Min value of window
+    pub first: f64, // Price of window opening
+    pub last: f64,  // Price of window closing
+    pub max: f64,   // Max value of window
+    pub min: f64,   // Min value of window
     pub movements: u32,
 }
 
 impl Window {
-    fn new(start_time: i64, price: f32) -> Window {
+    fn new(start_time: i64, price: f64) -> Window {
         Window {
             ema: EMA::new(),
             sequence_number: 0,
@@ -71,8 +70,8 @@ impl Window {
     fn tumble(
         &mut self,
         new_start_time: i64,
-        last_price: f32,
-    ) -> Option<(BreakoutType, (f32, f32))> {
+        last_price: f64,
+    ) -> Option<(BreakoutType, (f64, f64))> {
         // (ema_38, ema_100)
         let (new_ema_38, new_ema_100) = self.ema.calc(last_price, self.current_emas);
         let (old_ema_38, old_ema_100) = self.current_emas;

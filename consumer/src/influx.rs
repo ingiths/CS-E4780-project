@@ -28,12 +28,12 @@ pub enum BreakoutType {
 #[derive(InfluxDbWriteable, Clone)]
 struct EmaResult {
     time: DateTime<Utc>,
-    calc_38: f32,
-    calc_100: f32,
-    first: f32, // Price of window opening
-    last: f32,  // Price of window closing
-    max: f32,   // Max value of window
-    min: f32,   // Min value of window
+    calc_38: f64,
+    calc_100: f64,
+    first: f64, // Price of window opening
+    last: f64,  // Price of window closing
+    max: f64,   // Max value of window
+    min: f64,   // Min value of window
     movements: u32,
     #[influxdb(tag)]
     id: String,
@@ -56,8 +56,8 @@ impl Breakout {
         id: String,
         time: i64,
         btype: BreakoutType,
-        previous: (f32, f32),
-        current: (f32, f32),
+        previous: (f64, f64),
+        current: (f64, f64),
     ) -> Breakout {
         let time = Utc.timestamp_millis_opt(time).unwrap();
         let breakout = match btype {
@@ -123,11 +123,11 @@ impl InfluxResults {
         ts: i64,
         equity_type: String,
         window: &Window,
-        window_first: f32,
-        window_last: f32,
-        window_max: f32,
-        window_min: f32,
-        breakout: Option<(BreakoutType, (f32, f32))>,
+        window_first: f64,
+        window_last: f64,
+        window_max: f64,
+        window_min: f64,
+        breakout: Option<(BreakoutType, (f64, f64))>,
         movements: u32,
     ) -> InfluxResults {
         let perf = Performance::new(id.clone(), window.sequence_number, movements);

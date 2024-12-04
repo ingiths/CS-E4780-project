@@ -19,7 +19,7 @@ impl BreakoutMessage {
 }
 
 pub async fn start_breakout_producer(mut receiver: Receiver<BreakoutMessage>) {
-    let client = async_nats::connect("localhost:4223")
+    let client = async_nats::connect("localhost:4222")
         .await
         .expect("Could not create NATS producer for breakout event");
     let jetstream = async_nats::jetstream::new(client);

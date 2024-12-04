@@ -1,9 +1,9 @@
-use serde::{Deserialize, Serialize};
 use chrono::{TimeZone, Timelike, Utc};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TickEvent {
-    pub last: Option<f32>,
+    pub last: Option<f64>,
     pub trading_timestamp: Option<i64>,
     pub id: String,
     pub equity_type: String,
