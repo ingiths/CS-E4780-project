@@ -74,7 +74,7 @@ ingest-single consumer-count entity="":
             ../../data/debs2022-gc-trading-day-12-11-21.csv \
             ../../data/debs2022-gc-trading-day-13-11-21.csv \
             ../../data/debs2022-gc-trading-day-14-11-21.csv \
-            --entity {{entity}} --partition=global --consumer-count={{consumer-count}}
+            --entity {{entity}} --partition=single --consumer-count={{consumer-count}}
     fi
 
 

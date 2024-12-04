@@ -14,3 +14,11 @@ chrono = "0.4.38"
 anyhow = "1.0.93"
 influxdb = { version = "0.7.2", features = ["derive"] }
 clap = { version = "4.5.21", features = ["derive"] }
+
+[[bin]]
+name = "jetstream-consumer"
+path = "src/bin/jetstream.rs"
+
+[[bin]]
+name = "nats-core-consumer"
+path = "src/bin/nats_core.rs"

@@ -1,9 +1,3 @@
-mod breakout;
-mod cli;
-mod influx;
-mod tick;
-mod window;
-
 use std::vec;
 
 use anyhow::{anyhow, Result};
@@ -14,9 +8,11 @@ use futures::StreamExt;
 use influxdb::Client;
 use tokio::{sync::mpsc, task::JoinSet};
 
-use breakout::{start_breakout_producer, BreakoutMessage};
-use cli::{Cli, PartitionSubcommand};
-use influx::{start_influx_background_writer, InfluxConfig, InfluxResults};
+use consumer::tick::TickEvent;
+use consumer::window;
+use consumer::breakout::{BreakoutMessage, self};
+use consumer::cli::{Cli, PartitionSubcommand};
+use consumer::influx::{InfluxConfig, InfluxResults, self};
 
 async fn listen(
     js: jetstream::consumer::PullConsumer,
@@ -27,7 +23,7 @@ async fn listen(
 
     println!("Starting breakout Jestream producer");
     tokio::spawn(async move {
-        start_breakout_producer(breakout_rx).await;
+        breakout::start_breakout_producer(breakout_rx).await;
     });
 
     let influx_client = Client::new("http://localhost:8086", "trading_bucket").with_token("token");
@@ -38,7 +34,7 @@ async fn listen(
     );
     println!("Influx background batch writer starting");
     tokio::spawn(async move {
-        start_influx_background_writer(influx_client, influx_rx, influx_config).await;
+        influx::start_influx_background_writer(influx_client, influx_rx, influx_config).await;
     });
 
     let mut manager = window::WindowManager::new();
@@ -55,7 +51,7 @@ async fn listen(
                 for message in messages {
                     if let Ok(m) = message {
                         let f = m.ack();
-                        let tick_event = bincode::deserialize::<tick::TickEvent>(&m.payload)?;
+                        let tick_event = bincode::deserialize::<TickEvent>(&m.payload)?;
                         if !tick_event.is_valid() {
                             f.await.unwrap();
                             continue;
@@ -126,7 +122,7 @@ async fn main() -> Result<()> {
 
     let influx_config = InfluxConfig::new(cli.batch_size, cli.flush_period);
 
-    println!("Starting consumer");
+    println!("Starting jetstream consumer");
     println!("Influx batch size = {}", influx_config.batch_size);
     println!("Influx flush period = {} ms", influx_config.flush_period);
 

@@ -5,14 +5,16 @@ from enum import Enum
 import concurrent.futures
 from concurrent.futures import ProcessPoolExecutor  # Change this import
 
-from utils import preprocess_csv_file
-from jetstream import jetstream_ingest
-
-
 import polars as pl
 from alive_progress import alive_bar
 import typer
 
+from utils import preprocess_csv_file
+from ingester.ingester import producer
+
+class IngestionMode(Enum):
+    NATS_CORE = "nats_core"
+    JETSTREAM = "jetstream"
 
 class Partition(Enum):
     SINGLE = "single"
@@ -22,20 +24,26 @@ class Partition(Enum):
 app = typer.Typer()
 
 
-def process_partition(df, exchange_id):
-    asyncio.run(jetstream_ingest(df, exchange_id))
-    return exchange_id
 
 
 @app.command()
 def ingest(
     files: list[str],
+    mode: IngestionMode,
+    partition: Partition,
     entity: str | None = None,
-    partition: Partition = Partition.SINGLE,
     consumer_count: int = 1,
 ):
     total_message_count = 0
 
+    if mode == IngestionMode.NATS_CORE:
+        ingestion_method = producer.nats_core_ingest
+    else:
+        ingestion_method = producer.jetstream_ingest
+
+    def process_partition(df, exchange_id):
+        asyncio.run(ingestion_method(df, exchange_id))
+        return exchange_id
 
     def single_consumer(file: str, entity: str | None, consumer_count: int | None = 1):
         if consumer_count and consumer_count > 1:
@@ -79,7 +87,7 @@ def ingest(
         else:
             print("Starting ingestion into NATS server")
             df = preprocess_csv_file(file, entity=entity)
-            asyncio.run(jetstream_ingest(df, "exchange", show_progress_bar=True))
+            asyncio.run(ingestion_method(df, "exchange", 1000, show_progress_bar=True))
 
     def exchange_consumer(file: str):
         df = preprocess_csv_file(file)

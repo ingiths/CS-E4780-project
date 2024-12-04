@@ -8,6 +8,8 @@ services:
     environment:
       - NATS_SERVER_NAME=nats-server
       - NATS_CLUSTER_NAME=trading-cluster
+    command:
+      - --jetstream
     deploy:
       resources:
         limits:
