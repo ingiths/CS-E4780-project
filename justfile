@@ -117,4 +117,4 @@ ingest-multi count="1":
         ../../data/debs2022-gc-trading-day-12-11-21.csv \
         ../../data/debs2022-gc-trading-day-13-11-21.csv \
         ../../data/debs2022-gc-trading-day-14-11-21.csv \
-        --partition=count --consumer-count={{count}}
+        --partition=multi --consumer-count={{count}}

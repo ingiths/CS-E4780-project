@@ -43,7 +43,6 @@ async fn listen(
 
     let mut manager = window::WindowManager::new();
     // let mut messages = js.messages().await?;
-    let mut counter = 0;
     loop {
         // Sets max number of messages that can be buffered on the Client while processing already received messages. 
         // Higher values will yield better performance, but also potentially increase memory usage if application is acknowledging messages much slower than they arrive.
@@ -53,20 +52,12 @@ async fn listen(
                 if messages.is_empty() {
                     break;
                 }
-                if let Some(last) = messages.last() {
-                    if let Ok(m) = last {
-                        m.ack().await.unwrap();
-                    }
-                }
                 for message in messages {
                     if let Ok(m) = message {
-                        counter += 1;
-                        if counter % 1000 == 0 {
-                            print!("Messages processed {}\r", counter);
-                            std::io::stdout().flush().unwrap();
-                        }
+                        let f = m.ack();
                         let tick_event = bincode::deserialize::<tick::TickEvent>(&m.payload)?;
                         if !tick_event.is_valid() {
+                            f.await.unwrap();
                             continue;
                         }
                         if let Some(update) = manager.update(tick_event) {
@@ -76,6 +67,7 @@ async fn listen(
                             }
                             influx_tx.send(update).await?;
                         }
+                        f.await.unwrap();
                     }
                 }
             }

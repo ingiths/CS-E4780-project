@@ -22,7 +22,7 @@ async def jetstream_ingest(
     if show_progress_bar:
         with alive_bar(len(df)) as bar:
             for i, event in enumerate(df.iter_rows(named=False, buffer_size=1024)):
-                acks.append(js.publish_async(exchange, create_nats_message(*event)))
+                acks.append(js.publish(exchange, create_nats_message(*event)))
                 if len(acks) > flush_interval:
                     asyncio.gather(*acks)
                     acks.clear()
@@ -30,10 +30,13 @@ async def jetstream_ingest(
                 bar()
     else:
         for i, event in enumerate(df.iter_rows(named=False, buffer_size=1024)):
-            msg = js.publish_async(exchange, create_nats_message(*event))
-            if flush_interval and i % flush_interval == 0:
-                await msg
+            acks.append(js.publish(exchange, create_nats_message(*event)))
+            if len(acks) > flush_interval:
+                asyncio.gather(*acks)
+                acks.clear()
                 await nc.flush()
 
+    asyncio.gather(*acks)
+    acks.clear()
     await nc.flush()
     await nc.close()
