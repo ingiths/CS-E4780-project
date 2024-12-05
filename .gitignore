@@ -2,4 +2,3 @@ data/*.csv
 .zed/
 
 .python-version
-consumer/results.csv

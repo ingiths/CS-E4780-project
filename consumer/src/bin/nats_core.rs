@@ -5,21 +5,19 @@ use futures::StreamExt;
 use influxdb::Client;
 use tokio::{sync::mpsc, task::JoinSet};
 
+use consumer::breakout::{self, BreakoutMessage};
+use consumer::cli::{Cli, PartitionSubcommand};
+use consumer::influx::{self, InfluxConfig, InfluxResults};
 use consumer::tick::TickEvent;
 use consumer::window;
-use consumer::breakout::{BreakoutMessage, self};
-use consumer::cli::{Cli, PartitionSubcommand};
-use consumer::influx::{InfluxConfig, InfluxResults, self};
-
 
 async fn listen<T: AsRef<str>>(
     exchange: T,
     nats_client: async_nats::Client,
-    influx_config: InfluxConfig
+    influx_config: InfluxConfig,
 ) -> Result<()> {
     let (breakout_tx, breakout_rx) = mpsc::channel::<BreakoutMessage>(1000);
     let (influx_tx, influx_rx) = mpsc::channel::<InfluxResults>(1000);
-
 
     println!("Starting breakout Jestream producer");
     tokio::spawn(async move {
@@ -54,7 +52,8 @@ async fn listen<T: AsRef<str>>(
                 let breakout_message = BreakoutMessage::new(b.id, b.time, b.tags);
                 breakout_tx.send(breakout_message).await?;
             }
-            influx_tx.send(update).await?;{}
+            influx_tx.send(update).await?;
+            {}
         }
     }
 
@@ -73,23 +72,25 @@ async fn consumer<T: AsRef<str>>(exchange: T, config: InfluxConfig) -> Result<()
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    println!(r"
+    println!(
+        r"
     _   _    _  _____ ____  
     | \ | |  / \|_   _/ ___| 
     |  \| | / _ \ | | \___ \ 
     | |\  |/ ___ \| |  ___) |
     |_| \_/_/   \_\_| |____/ 
-");
+"
+    );
 
     let influx_config = InfluxConfig::new(cli.batch_size, cli.flush_period);
     println!("Influx batch size = {}", influx_config.batch_size);
     println!("Influx flush period = {} ms", influx_config.flush_period);
 
     match cli.partition_subcommand {
-        PartitionSubcommand::Single =>  { 
+        PartitionSubcommand::Single => {
             println!("Spawning single global consumer subscribed to the 'exchange' subject");
-            consumer("exchange", influx_config).await? 
-        },
+            consumer("exchange", influx_config).await?
+        }
         PartitionSubcommand::ByExchange => {
             // Returns three results, when the futures never return
             println!("Spawning three exchange consumer subscribed to the 'exchange.FR', 'exchange.NL', 'exchange.ETR' subjects");
@@ -102,17 +103,18 @@ async fn main() -> Result<()> {
                 tokio::spawn(async move { consumer("exchange.ETR", config_c).await }),
             );
         }
-        PartitionSubcommand::Multi { n } => { 
+        PartitionSubcommand::Multi { n } => {
             let mut set = JoinSet::new();
             for i in 0..n {
-                println!("Spawning consumer subscribed to the 'exchange.{}' subject", i);
+                println!(
+                    "Spawning consumer subscribed to the 'exchange.{}' subject",
+                    i
+                );
                 let config = influx_config.clone();
-                set.spawn(async move {
-                    consumer(format!("exchange.{}", i), config.clone()).await
-                });
+                set.spawn(async move { consumer(format!("exchange.{}", i), config.clone()).await });
             }
             // Wait forever...
-            while let Some(_) = set.join_next().await { }
+            while let Some(_) = set.join_next().await {}
         }
     }
 

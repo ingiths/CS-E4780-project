@@ -31,4 +31,10 @@ pub struct Cli {
     /// Flush period if no current batch size of windows does not exceed `batch_size`. Specified in milliseconds (ms)
     #[arg(short, long, default_value_t = 500)]
     pub flush_period: u64,
+
+    #[arg(long, default_value_t = false)]
+    pub profile: bool,
+
+    #[arg(long, default_value_t = 300)]
+    pub profile_duration: u64,
 }

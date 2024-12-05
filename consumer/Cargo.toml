@@ -14,6 +14,7 @@ chrono = "0.4.38"
 anyhow = "1.0.93"
 influxdb = { version = "0.7.2", features = ["derive"] }
 clap = { version = "4.5.21", features = ["derive"] }
+sysinfo = "0.33.0"
 
 [[bin]]
 name = "jetstream-consumer"

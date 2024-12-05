@@ -8,16 +8,13 @@ use futures::StreamExt;
 use influxdb::Client;
 use tokio::{sync::mpsc, task::JoinSet};
 
+use consumer::breakout::{self, BreakoutMessage};
+use consumer::cli::{Cli, PartitionSubcommand};
+use consumer::influx::{self, InfluxConfig, InfluxResults};
 use consumer::tick::TickEvent;
 use consumer::window;
-use consumer::breakout::{BreakoutMessage, self};
-use consumer::cli::{Cli, PartitionSubcommand};
-use consumer::influx::{InfluxConfig, InfluxResults, self};
 
-async fn listen(
-    js: jetstream::consumer::PullConsumer,
-    influx_config: InfluxConfig,
-) -> Result<()> {
+async fn listen(js: jetstream::consumer::PullConsumer, influx_config: InfluxConfig) -> Result<()> {
     let (breakout_tx, breakout_rx) = mpsc::channel::<BreakoutMessage>(1000);
     let (influx_tx, influx_rx) = mpsc::channel::<InfluxResults>(1000);
 
@@ -40,7 +37,7 @@ async fn listen(
     let mut manager = window::WindowManager::new();
     // let mut messages = js.messages().await?;
     loop {
-        // Sets max number of messages that can be buffered on the Client while processing already received messages. 
+        // Sets max number of messages that can be buffered on the Client while processing already received messages.
         // Higher values will yield better performance, but also potentially increase memory usage if application is acknowledging messages much slower than they arrive.
         if let Ok(message_stream) = js.stream().max_messages_per_batch(10_000).messages().await {
             let mut message_stream = message_stream.ready_chunks(10_000);
@@ -78,20 +75,28 @@ async fn consumer<T: AsRef<str>>(exchange: T, influx_config: InfluxConfig) -> Re
     println!("Connected to NATS server");
     let jetstream = async_nats::jetstream::new(nats_client);
 
-    println!("Listening to stream: 'trading-movements', subject: '{}'", exchange.as_ref().to_string());
+    println!(
+        "Listening to stream: 'trading-movements', subject: '{}'",
+        exchange.as_ref().to_string()
+    );
     let consumer = jetstream
         .get_stream("trading-movements")
-        .await?.create_consumer(jetstream::consumer::pull::Config {
+        .await?
+        .create_consumer(jetstream::consumer::pull::Config {
             ack_policy: jetstream::consumer::AckPolicy::All,
             filter_subject: exchange.as_ref().to_string(),
             ..Default::default()
-        }).await?;
+        })
+        .await?;
 
     listen(consumer, influx_config).await?;
     Ok(())
 }
 
-async fn setup_stream(stream_name: impl Into<String>, subjects: Vec<impl Into<String>>) -> Result<()> {
+async fn setup_stream(
+    stream_name: impl Into<String>,
+    subjects: Vec<impl Into<String>>,
+) -> Result<()> {
     let nats_client = async_nats::connect("localhost:4222").await.map_err(|_| {
         anyhow!("Could not connect to NATS server at localhost:4222, is the server running?")
     })?;
@@ -100,7 +105,7 @@ async fn setup_stream(stream_name: impl Into<String>, subjects: Vec<impl Into<St
     let jetstream = async_nats::jetstream::new(nats_client);
     match jetstream.delete_stream(&stream_name).await {
         Ok(_) => println!("Deleted stream {} and setting up again", stream_name),
-        Err(_) => {} 
+        Err(_) => {}
     }
     let subjects = subjects.into_iter().map(|s| s.into()).collect();
     println!("Setting up subjects: {:#?}", subjects);
@@ -115,17 +120,18 @@ async fn setup_stream(stream_name: impl Into<String>, subjects: Vec<impl Into<St
     Ok(())
 }
 
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    println!(r"
+    println!(
+        r"
     _      _       _                            
     | | ___| |_ ___| |_ _ __ ___  __ _ _ __ ___  
  _  | |/ _ \ __/ __| __| '__/ _ \/ _` | '_ ` _ \ 
 | |_| |  __/ |_\__ \ |_| | |  __/ (_| | | | | | |
  \___/ \___|\__|___/\__|_|  \___|\__,_|_| |_| |_|
-");
+"
+    );
 
     let influx_config = InfluxConfig::new(cli.batch_size, cli.flush_period);
 
@@ -145,7 +151,11 @@ async fn main() -> Result<()> {
             let config_1 = influx_config.clone();
             let config_2 = influx_config.clone();
             let config_3 = influx_config.clone();
-            setup_stream("trading-movements", vec!["exchange.FR", "exchange.NL", "exchange.ETR"]).await?;
+            setup_stream(
+                "trading-movements",
+                vec!["exchange.FR", "exchange.NL", "exchange.ETR"],
+            )
+            .await?;
             let (_, _, _) = tokio::join!(
                 tokio::spawn(async move { consumer("exchange.FR", config_1).await }),
                 tokio::spawn(async move { consumer("exchange.NL", config_2).await }),
@@ -154,7 +164,9 @@ async fn main() -> Result<()> {
         }
         PartitionSubcommand::Multi { n } => {
             println!("Spawning {} consumers", n);
-            let subjects = (0..n).map(|i| format!("exchange.{}", i)).collect::<Vec<String>>();
+            let subjects = (0..n)
+                .map(|i| format!("exchange.{}", i))
+                .collect::<Vec<String>>();
             setup_stream("trading-movements", subjects).await?;
             let mut set = JoinSet::new();
             for i in 0..n {
