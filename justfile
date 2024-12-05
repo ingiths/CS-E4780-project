@@ -64,7 +64,7 @@ ingest-single mode consumer-count entity="":
             ../../data/debs2022-gc-trading-day-14-11-21.csv \
             --consumer-count={{consumer-count}}
     else
-        $RUNNER main.py \
+        $RUNNER main.py ${python_mode} single \
             ../../data/debs2022-gc-trading-day-08-11-21.csv \
             ../../data/debs2022-gc-trading-day-09-11-21.csv \
             ../../data/debs2022-gc-trading-day-10-11-21.csv \
@@ -72,7 +72,7 @@ ingest-single mode consumer-count entity="":
             ../../data/debs2022-gc-trading-day-12-11-21.csv \
             ../../data/debs2022-gc-trading-day-13-11-21.csv \
             ../../data/debs2022-gc-trading-day-14-11-21.csv \
-            --entity {{entity}} --partition=single --consumer-count={{consumer-count}}
+            --entity {{entity}} --consumer-count={{consumer-count}}
     fi
 
 

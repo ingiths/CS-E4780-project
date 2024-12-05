@@ -18,7 +18,7 @@ It is recommened to install the [`just` command runner](https://github.com/casey
 
 Start by getting the available recipes by running `just -l`
 
-```console
+```bash
 $ just -l
 Available recipes:
     consume mode partition batch-size="500" flush-period="500" count="1" # Start a consumer that listens for messages related to tick data
@@ -57,4 +57,10 @@ TODO
 
 # Profiling
 
-Profile using the `just profile <program>` to acquire statistics about CPU and memory usage (uses `top` behind the scene).
+Profile using the `just profile <program> <file_name>` to acquire statistics about CPU and memory usage (uses `top` behind the scene) and output in a CSV format to `<file_name>`.
+
+```bash
+# Assume that a user has started a consumer with `just c core single`
+just profile nats-core-consumer nats-core-single
+# And the output will be in the `performance/nats-core-single.csv` file
+```
