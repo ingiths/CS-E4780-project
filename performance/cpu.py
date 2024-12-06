@@ -9,21 +9,19 @@ def plot_cpu_usage(input: str, output: str):
 
     start_time = df['timestamp'][0]
     df = df.with_columns((pl.col('timestamp') - start_time) / 1000).cast(pl.Int64) # Stupid conversion to seconds
-    df = df.filter(pl.col('timestamp') <= 60)
 
     plt.figure(figsize=(10,6))
     plt.plot(df['timestamp'], df['cpu_percent'], 'b-')
     plt.ylabel('CPU %')
     plt.title('CPU Usage Over Time')
     plt.ylim(0, 100)
-    plt.xlim(0, 60)
 
     def x_fmt(x, _): return f'{int(x)}s'
     def y_fmt(y, _): return f'{int(y)}%'
 
     plt.gca().xaxis.set_major_formatter(FuncFormatter(x_fmt))
     plt.gca().yaxis.set_major_formatter(FuncFormatter(y_fmt))
-    plt.gca().xaxis.set_major_locator(MultipleLocator(10))
+    plt.gca().xaxis.set_major_locator(MultipleLocator(30))
 
     plt.grid(True)
 
