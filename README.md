@@ -4,13 +4,21 @@ Scalable Systems and Data Management Course Project Detecting Trading Trends in 
 
 # Structure
 
-- `docker/` contains a `docker-compose.yml` file to run the [NATS](https://nats.io/) server
-- `ingester/` contains the source code for ingesting financial tick data into the NATS server
-- `consumer/` contains the consumer of the NATS/JetStream subjects and calculates the quantative queries and breakout patterns.
+- `docker/` contains a `docker-compose.yml` file to run the [NATS](https://nats.io/) server.
+    - To access Grafana, go to [http://localhost:3000](http://localhost:3000) using the `admin:admin` credentials for login.
+        - Or press [here](http://localhost:3000/d/fe4t4qfwmesxsf/trading?orgId=1&from=2021-11-07T22:00:00.000Z&to=2021-11-14T21:59:59.000Z&timezone=utc&var-id=&refresh=5s) to straing to the dashboard.
+        - Notice that the time range must be from `2021-11-08T00:00:00` to `2021-11-14T23:59:59`.
+    - The NATS server is accessible on:
+        - [nats://localhost:4222](nats://localhost:4222) to connect NATS consumers and producers to the messaging system.
+        - [hptt://localhost:8222](http://localhost:8222) to access the NATS web interface.
+    - The InfluxDB server is accessible on [http://localhost:8086](http://localhost:8086) using `admin:password` credentials for login.
+- `ingester/` contains the source code for ingesting financial tick data into the NATS server.
+- `consumer/` contains the consumer of the NATS/JetStream subjects and calculates the quantative queries and breakout patterns..
 - `data/` contains the `csv` file from the DEBS 2022 challenge.
 
 > [!IMPORTANT]  
 > The data from the DEBS challenge must reside in the `data/` directory.
+
 
 # How to run
 
