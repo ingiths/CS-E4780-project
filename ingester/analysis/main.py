@@ -165,10 +165,10 @@ def compare(data_file: str, entity: str):
 @app.command()
 def print_event_count(limit: int = 10):
     previous = None
-    paths = sorted(pathlib.Path("../data").glob("*.csv"))
+    paths = sorted(pathlib.Path("../../data").glob("*.csv"))
     reversed(paths)
     with alive_bar(len(paths)) as bar:
-        for path in sorted(pathlib.Path("../data").glob("*.csv")):
+        for path in sorted(pathlib.Path("../../data").glob("*.csv")):
             counts = (
                 pl.scan_csv(path, separator=",", comment_prefix="#")
                 .select("ID")
@@ -191,7 +191,8 @@ def print_event_count(limit: int = 10):
 @app.command()
 def print_event_count_window(window: str = "5m", limit: int = 5):
     previous = None
-    paths = sorted(pathlib.Path("../data").glob("*.csv"))[:5]
+    # For some reason, the data in the weekend files is messed up
+    paths = sorted(pathlib.Path("../../data").glob("*.csv"))[:5]
     reversed(paths)
     with alive_bar(len(paths)) as bar:
         for path in paths:
@@ -230,6 +231,7 @@ def print_event_count_window(window: str = "5m", limit: int = 5):
 
     if previous is not None:
         print(previous.sort("Events in window", descending=True).head(limit))
+        print(previous.describe())
 
 
 if __name__ == "__main__":
