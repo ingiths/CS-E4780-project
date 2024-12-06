@@ -134,6 +134,25 @@ ingest-multi mode count="1":
         ../../data/debs2022-gc-trading-day-13-11-21.csv \
         ../../data/debs2022-gc-trading-day-14-11-21.csv \
 
+watch mode +ids:
+    #!/usr/bin/env sh
+    if [ "{{mode}}" = "core" ]; then
+        python_mode="nats_core"
+    elif [ "{{mode}}" = "jetstream" ]; then
+        python_mode="jetstream"
+    else
+        echo "Error: mode must be 'core' or 'jetstream'" >&2
+        exit 1
+    fi
+    cd ingester/trader
+    if command -v uv >/dev/null 2>&1; then
+        RUNNER="uv run"
+    else
+        RUNNER="python3"
+    fi
+
+    $RUNNER main.py {{mode}} {{ids}}
+
 # Profile CPU and memory usage of a program
 profile program file-name rate="1":
     #!/usr/bin/env bash

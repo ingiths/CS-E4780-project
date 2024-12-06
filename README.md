@@ -61,7 +61,8 @@ Available recipes:
 
 ## Start the breakout watcher
 
-TODO
+- `just watch core ALE15.FR 2ICEU.FR` to start watching for breakout events when it comes to the unique IDs ALE15.FR and 2ICEU.FR
+- `just watch jetstream ALE15.FR 2ICEU.FR` to use JetStraem instead of Core NATS
 
 # Profiling
 
