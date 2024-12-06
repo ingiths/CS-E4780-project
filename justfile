@@ -126,13 +126,13 @@ ingest-multi mode count="1":
     echo "Ingesting all files, creating {{count}} ingesters"
     $RUNNER main.py ${python_mode} multi \
         ../../data/debs2022-gc-trading-day-08-11-21.csv \
+        --consumer-count={{count}}
         ../../data/debs2022-gc-trading-day-09-11-21.csv \
         ../../data/debs2022-gc-trading-day-10-11-21.csv \
         ../../data/debs2022-gc-trading-day-11-11-21.csv \
         ../../data/debs2022-gc-trading-day-12-11-21.csv \
         ../../data/debs2022-gc-trading-day-13-11-21.csv \
         ../../data/debs2022-gc-trading-day-14-11-21.csv \
-        --consumer-count={{count}}
 
 # Profile CPU and memory usage of a program
 profile program file-name rate="1":

@@ -86,7 +86,7 @@ def ingest(
                 for id, df in list(ingesters.items()):
                     print(f"Spawning task for {id} - ingesting {len(df)} events")
                     message_count += len(df)
-                    future = executor.submit(ingestion_method, df, "exchange")
+                    future = executor.submit(async_wrapped, mode, df, "exchange")
                     futures.append(future)
                 print(f"Sending {message_count} message")
                 with alive_bar(len(futures)) as bar:

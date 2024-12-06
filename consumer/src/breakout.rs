@@ -18,7 +18,45 @@ impl BreakoutMessage {
     }
 }
 
-pub async fn start_breakout_producer(mut receiver: Receiver<BreakoutMessage>) {
+pub async fn start_core_nats_breakout_producer(mut receiver: Receiver<BreakoutMessage>) {
+    let client = async_nats::connect("localhost:4222")
+        .await
+        .expect("Could not create NATS producer for breakout event");
+    while let Some(breakout) = receiver.recv().await {
+        let mut headers = async_nats::HeaderMap::new();
+        headers.insert("ID", breakout.id.clone());
+        match breakout.breakout_type.as_ref() {
+            "bullish" => {
+                client
+                    .publish_with_headers(
+                        "breakouts",
+                        headers,
+                        format!("Bullish event at {}", breakout.ts)
+                            .bytes()
+                            .collect(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            "bearish" => {
+                client
+                    .publish_with_headers(
+                        "breakouts",
+                        headers,
+                        format!("Bearish event at {}", breakout.ts)
+                            .bytes()
+                            .collect(),
+                    )
+                    .await
+                    .unwrap();
+            }
+            _ => panic!("This should not happen"),
+        }
+    }
+}
+
+
+pub async fn start_jetstream_breakout_producer(mut receiver: Receiver<BreakoutMessage>) {
     let client = async_nats::connect("localhost:4222")
         .await
         .expect("Could not create NATS producer for breakout event");
@@ -30,7 +68,6 @@ pub async fn start_breakout_producer(mut receiver: Receiver<BreakoutMessage>) {
         ..Default::default()
     });
     while let Some(breakout) = receiver.recv().await {
-        println!("Publishing breakout event");
         match breakout.breakout_type.as_ref() {
             "bullish" => {
                 jetstream

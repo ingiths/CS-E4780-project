@@ -20,7 +20,7 @@ async fn listen(js: jetstream::consumer::PullConsumer, influx_config: InfluxConf
 
     println!("Starting breakout Jestream producer");
     tokio::spawn(async move {
-        breakout::start_breakout_producer(breakout_rx).await;
+        breakout::start_jetstream_breakout_producer(breakout_rx).await;
     });
 
     let influx_client = Client::new("http://localhost:8086", "trading_bucket").with_token("token");

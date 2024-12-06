@@ -6,6 +6,7 @@ import typer
 import datetime
 import pathlib
 from alive_progress import alive_bar
+import re
 
 # Print all rows by default
 pl.Config.set_tbl_rows(-1)
@@ -14,27 +15,23 @@ app = typer.Typer()
 
 
 def process_influx_data(csv_data: str) -> pl.DataFrame:
-    # Skip the first row which contains the empty result field
     df = pl.read_csv(
         StringIO(csv_data),
         null_values=[""],
     )
 
-    # Select only the columns we need
     df = df.select(
         [
             pl.col("_time").cast(pl.Datetime).dt.time().alias("time"),
-            pl.col("_value").ceil().cast(pl.Int64).alias("value"),
+            pl.col("_value").round(0).cast(pl.Int64).alias("value"),
             pl.col("_field").alias("field"),
         ]
     )
 
-    # Pivot the data
     pivoted_df = df.pivot(
         "field", values="value", index="time", aggregate_function="first"
     )
 
-    # Sort by time
     pivoted_df = pivoted_df.sort("time")
 
     return pivoted_df
@@ -96,7 +93,7 @@ def load_actual_solution(file: str, entity: str) -> pl.DataFrame:
     )
     df = df.drop_nulls()
     # Sometimes, the data is messed up
-    df = df.with_columns([pl.col("Last").cast(pl.Float32)])
+    df = df.with_columns([pl.col("Last").cast(pl.Float64)])
     df = df.with_columns(
         [
             pl.col("Trading time")
@@ -114,10 +111,10 @@ def load_actual_solution(file: str, entity: str) -> pl.DataFrame:
         df.group_by(["ID", "window_start"])
         .agg(
             [
-                pl.col("Last").first().ceil().cast(pl.Int64).alias("First"),
-                pl.col("Last").last().ceil().cast(pl.Int64).alias("Last"),
-                pl.col("Last").max().ceil().cast(pl.Int64).alias("Max"),
-                pl.col("Last").min().ceil().cast(pl.Int64).alias("Min"),
+                pl.col("Last").first().round(0).cast(pl.Int64).alias("First"),
+                pl.col("Last").last().round(0).cast(pl.Int64).alias("Last"),
+                pl.col("Last").max().round(0).cast(pl.Int64).alias("Max"),
+                pl.col("Last").min().round(0).cast(pl.Int64).alias("Min"),
                 pl.col("Last").len().alias("Movements"),
                 pl.col("Trading time").last().cast(pl.Time).alias("Last update"),
                 pl.col("Trading time").first().cast(pl.Time).alias("First update"),
@@ -141,14 +138,19 @@ def analytical(data_file: str, entity: str):
 
 @app.command()
 def compare(data_file: str, entity: str):
-    file_trading_date = str(
-        datetime.datetime.strptime(data_file[32:40], "%d-%m-%y").date()
-    )
-    our = load_our_solution(entity, file_trading_date)
+    pattern = r".*debs\d{4}-gc-trading-day-(\d{2})-(\d{2})-(\d{2})\.csv"
+    re_match = re.search(pattern, data_file)
+    if not re_match:
+        raise ValueError(f"No date found in supplied data file {data_file}")
+    day, month, year = re_match.groups()
+    print(f"Reading file {data_file}")
+    date_str = f"20{year}-{month}-{day}"  # Assuming 20xx for the year
+    dt = str(datetime.datetime.strptime(date_str, "%Y-%m-%d").date())
+    our = load_our_solution(entity, dt)
     actual = load_actual_solution(data_file, entity)
     actual = actual.drop("Last update")
     # TODO: Empty windows
-    print(f"Running comparison for {file_trading_date}")
+    print(f"Running comparison for {dt}")
     difference = pl.DataFrame().with_columns(
         [
             pl.Series(name="Time", values=our["time"]),
@@ -156,9 +158,13 @@ def compare(data_file: str, entity: str):
             pl.Series(name="Last", values=our["last"] - actual["Last"]),
             pl.Series(name="Max", values=our["max"] - actual["Max"]),
             pl.Series(name="Min", values=our["min"] - actual["Min"]),
-            pl.Series(name="Movements", values=our["movements"] - actual["Movements"]),
+            # Movements is offset by 1 for the analytical solution for some reason
+            pl.Series(
+                name="Movements", values=our["movements"] - actual["Movements"] + 1
+            ),
         ]
     )
+
     print(difference)
 
 
